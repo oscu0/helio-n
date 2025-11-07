@@ -208,5 +208,5 @@ __marimo__/
 
 **/.DS_Store
 Outputs
-Data/Training
-Data/Inference
+Data/Training/**
+Data/Inferrence/**
