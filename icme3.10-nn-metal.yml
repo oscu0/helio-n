@@ -16,6 +16,7 @@ dependencies:
       - cdflib
       - ipykernel
       - ipympl
+      - jax-metal
       - jupyter
       - keras
       - lxml
