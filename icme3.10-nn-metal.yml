@@ -1,0 +1,40 @@
+name: icme3.10-nn-metal
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - apple::tensorflow-deps
+  - psycopg
+  - cx_oracle
+  - pip
+  - pip:
+      - aiapy
+      - astropy
+      - beautifulsoup4
+      - cdasws
+      - cdflib
+      - ipykernel
+      - ipympl
+      - jupyter
+      - keras
+      - lxml
+      - matplotlib
+      - matplotlib-venn
+      - numpy
+      - openpyxl
+      - pandas
+      - plotly
+      - pyspedas
+      - requests
+      - scikit-image
+      - scipy
+      - seaborn
+      - spacepy
+      - sunpy
+      - sympy
+      - tensorflow-macos
+      - tensorflow-metal
+      - urllib3
+      - xarray
+prefix: /opt/anaconda3/envs/icme3.10-nn-metal
