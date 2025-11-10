@@ -29,11 +29,11 @@ dependencies:
   - seaborn
   - sunpy
   - sympy
-  - tensorflow
+  # - tensorflow
   - keras
   - urllib3
   - xarray
   - pip:
       - pyspedas
       - spacepy
-prefix: /opt/anaconda3/envs/icme3.13
+prefix: /opt/anaconda3/envs/icme3.12
