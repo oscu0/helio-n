@@ -210,3 +210,4 @@ __marimo__/
 Outputs
 Data/Training/**
 Data/Inferrence/**
+model_CH_UNet.keras
