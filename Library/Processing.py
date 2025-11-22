@@ -12,13 +12,7 @@ from skimage.morphology import (
 )
 
 
-with open("./Config/Smoothing Params.json", "r") as f:
-    smoothing_params = json.load(f)
-
-
-with open("./Config/Training Params.json", "r") as f:
-    model_params = json.load(f)
-
+from .Config import *
 
 def fits_to_pmap(model, img2d, resize=False, img_size=model_params["img_size"]):
     img = np.asarray(img2d, dtype=np.float32)
@@ -61,6 +55,7 @@ def pmap_to_mask(pmap, smoothing_params=smoothing_params, save=False):
 
 
 def save_pmap(row, pmap=None):
+    print(row)
     path = row.mask_path.replace("CH_MASK_FINAL.png", "UNET_PMAP.npy")
     if pmap is None:
         pmap = fits_to_pmap(prepare_fits(row.fits_path))

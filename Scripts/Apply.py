@@ -8,21 +8,24 @@ if len(sys.argv) != 3:
 start = sys.argv[1]
 end = sys.argv[2]
 
-import os
-os.path.append("..")
+import sys
+sys.path.append("..")
 
 import json
 import pandas as pd
 
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 from Library.Model import load_trained_model
 from Library.Processing import *
+from Library.Config import *
 
-with open("./Config/Paths.json", "r") as f:
-    paths = json.load(f)
 
-model = load_trained_model(paths["model_path"])
+model = load_trained_model(SCRIPT_DIR / ".." / paths["model_path"])
 
-df = pd.read_parquet("../Data/df.parquet")
+df = pd.read_parquet(SCRIPT_DIR / "../Data/df.parquet")
 
 df = df[start:end]
 

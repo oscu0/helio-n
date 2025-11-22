@@ -1,4 +1,4 @@
-import json
+from Config import *
 
 import numpy as np
 
@@ -6,13 +6,13 @@ import numpy as np
 from skimage import measure
 import mahotas
 
+from .Config import *
 from . import Processing
+from .IO import prepare_fits
 
 import ipywidgets as widgets
 from IPython.display import display, clear_output
 
-with open("./Config/Smoothing Params.json", "r") as f:
-    smoothing_params = json.load(f)
 
 def _ensure_binary_mask(mask):
     """Convert mask to boolean 2D array."""
@@ -245,7 +245,7 @@ def rect_area(mask):
 def stats(row, smoothing_params=smoothing_params, m2=None):
     m1 = Processing.prepare_mask(row.mask_path)
     if m2 is None:
-        m2 = Processing.pmap_to_mask(fits_to_pmap(prepare_fits(row.fits_path)), smoothing_params)
+        m2 = Processing.pmap_to_mask(Processing.fits_to_pmap(IO.prepare_fits(row.fits_path)), smoothing_params)
 
     stats = {}
 

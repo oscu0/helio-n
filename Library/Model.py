@@ -12,12 +12,8 @@ import keras
 from keras import layers, ops
 
 from . import IO
+from .Config import model_params
 
-with open("./Config/Training Params.json", "r") as f:
-    model_params = json.load(f)
-
-with open("./Config/Paths.json", "r") as f:
-    paths = json.load(f)
 
 def augment_pair(img, mask):
     # --- random horizontal flip ---
@@ -244,10 +240,10 @@ def train_model(pairs_df):
         callbacks=callbacks,
     )
 
-def load_trained_model():
+def load_trained_model(path):
     custom_objects = {
         "bce_dice_loss": bce_dice_loss,
         "dice_coef": dice_coef,
     }
-    model = keras.models.load_model(paths["model_path"], custom_objects=custom_objects)
+    model = keras.models.load_model(path, custom_objects=custom_objects)
     return model
