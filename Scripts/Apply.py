@@ -31,4 +31,4 @@ if len(df) == 0:
     print("Desired time range is empty, likely due to incorrect date range specification. Use YYYYMMHH.")
     sys.exit(1)
 else:
-    df.apply(save_pmap, axis=1)
+    df.apply(lambda x: save_pmap(model, x), axis=1)
