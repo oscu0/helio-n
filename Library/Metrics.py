@@ -8,8 +8,7 @@ import mahotas
 
 from Library.Config import *
 from Library import Processing
-from Library.IO import prepare_fits
-
+from Library.IO import prepare_fits, prepare_mask
 
 
 def _ensure_binary_mask(mask):
@@ -20,6 +19,7 @@ def _ensure_binary_mask(mask):
     if mask.dtype == bool:
         return mask
     return mask > 0.5
+
 
 def compute_zernike_descriptor(mask, degree=8):
     """
@@ -76,6 +76,7 @@ def compute_zernike_descriptor(mask, degree=8):
         desc = desc / norm
 
     return desc
+
 
 def compute_fourier_descriptor(mask, num_descriptors=20, n_samples=256):
     """
@@ -160,6 +161,7 @@ def compute_fourier_descriptor(mask, num_descriptors=20, n_samples=256):
 
     return desc
 
+
 def iou(mask1, mask2):
     """
     Compute Intersection-over-Union (IoU) for two binary masks.
@@ -186,6 +188,7 @@ def iou(mask1, mask2):
         return 1.0 if intersection == 0 else 0.0
 
     return intersection / union
+
 
 def shape_distance(desc_a, desc_b, metric="l2"):
     """
@@ -219,7 +222,8 @@ def shape_distance(desc_a, desc_b, metric="l2"):
         return 1.0 - cos_sim  # cosine distance
     else:
         raise ValueError(f"Unknown metric: {metric!r}")
-    
+
+
 def dice(mask1, mask2):
     m1 = np.asarray(mask1) > 0.5
     m2 = np.asarray(mask2) > 0.5
@@ -234,16 +238,20 @@ def dice(mask1, mask2):
 
     return 2.0 * intersection / denom
 
+
 def rect_area(mask):
     range_x = [384, 640]
     range_y = [256, 768]
     return mask[range_y[0] : range_y[1], range_x[0] : range_x[1]].flatten().sum()
 
 
-def stats(row, smoothing_params=smoothing_params, m2=None):
-    m1 = Processing.prepare_mask(row.mask_path)
+def stats(row, smoothing_params=smoothing_params, m2=None, model=None):
+    m1 = prepare_mask(row.mask_path)
     if m2 is None:
-        m2 = Processing.pmap_to_mask(Processing.fits_to_pmap(prepare_fits(row.fits_path)), smoothing_params)
+        m2 = Processing.pmap_to_mask(
+            Processing.fits_to_pmap(model, prepare_fits(row.fits_path)),
+            smoothing_params,
+        )
 
     stats = {}
 
@@ -263,6 +271,7 @@ def stats(row, smoothing_params=smoothing_params, m2=None):
     stats["dice"] = dice(m1, m2)
 
     return stats
+
 
 def print_distance(row, smoothing_params=smoothing_params):
     s = stats(row, smoothing_params)
