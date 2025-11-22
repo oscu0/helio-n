@@ -72,7 +72,6 @@ def pmap_to_mask(pmap, smoothing_params=smoothing_params, save_path=None):
 
 
 def save_pmap(model, row, pmap=None):
-    print(row)
     path = row.mask_path.replace("CH_MASK_FINAL.png", "UNET_PMAP.npy")
     if pmap is None:
         pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
