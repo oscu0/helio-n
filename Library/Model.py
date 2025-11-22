@@ -11,8 +11,8 @@ import keras
 # keras.config.set_backend("jax")
 from keras import layers, ops
 
-from . import IO
-from .Config import model_params
+from Library import IO
+from Library.Config import model_params
 
 
 def augment_pair(img, mask):

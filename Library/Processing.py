@@ -12,7 +12,8 @@ from skimage.morphology import (
 )
 
 
-from .Config import *
+from Library.Config import *
+from Library.IO import prepare_fits
 
 def fits_to_pmap(model, img2d, resize=False, img_size=model_params["img_size"]):
     img = np.asarray(img2d, dtype=np.float32)
