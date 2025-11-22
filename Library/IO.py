@@ -133,4 +133,8 @@ def prepare_dataset(fits_root, masks_root):
     matches.drop(["key"], axis=1, inplace=True)
     matches["pmap_path"] = ""
 
+    matches.to_parquet("./Data/df.parquet")
+    fits_only.to_csv("./Data/fits_only.csv")
+    masks_only.to_csv("./Data/masks_only.csv")
+
     return matches, fits_only, masks_only
