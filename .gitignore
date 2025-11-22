@@ -209,5 +209,5 @@ __marimo__/
 **/.DS_Store
 Outputs
 Data/Training/**
-Data/Inferrence/**
+Data/Inference/**
 model_CH_UNet.keras
