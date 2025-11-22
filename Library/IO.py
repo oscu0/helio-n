@@ -47,9 +47,8 @@ def prepare_hmi_jpg(jpg_path, target_size=1024):
 
 
 def prepare_mask(path, preserve_255=False):
-    from PIL import Image
 
-    im = Image.open(path).convert("L")
+    im = PIL.Image.open(path).convert("L")
     if not preserve_255:
         arr = np.array(im, dtype=np.float32)
         # Consider >127 as CH
@@ -67,8 +66,8 @@ def prepare_hmi_jpg(
     Load an HMI JPG (512×512 or similar) and upscale to AIA grid size.
     Returns float32 magnetogram-like values in range [-1,1] based on brightness.
     """
-    im = Image.open(path).convert("L")  # grayscale JPG
-    im = im.resize(target_size, Image.BILINEAR)
+    im = PIL.Image.open(path).convert("L")  # grayscale JPG
+    im = im.resize(target_size, PIL.Image.BILINEAR)
     arr = np.array(im, dtype=np.float32)
 
     # Convert brightness → rough polarity proxy:
