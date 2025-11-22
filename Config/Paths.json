@@ -1,0 +1,5 @@
+{
+    "fits_root": "/Volumes/JetDrive 330/SDO Data/FITS",
+    "masks_root": "/Volumes/JetDrive 330/SDO Data/Masks",
+    "model_path": "./Outputs/model_CH_UNet.keras"
+}
