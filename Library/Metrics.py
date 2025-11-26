@@ -8,7 +8,7 @@ import mahotas
 
 from Library.Config import *
 from Library import Processing
-from Library.IO import prepare_fits, prepare_mask
+from Library.IO import prepare_fits, prepare_mask, prepare_pmap
 
 
 def _ensure_binary_mask(mask):
@@ -21,56 +21,106 @@ def _ensure_binary_mask(mask):
     return mask > 0.5
 
 
-def compute_zernike_descriptor(mask, degree=8):
+def equatorial_oval_mask(
+    lon_half_deg=15.0,  # half-width in longitude, degrees
+    lat_half_deg=30.0,  # half-height in latitude, degrees
+    center=None,
+    radius=None,
+):
     """
-    Compute Zernike-moment-based shape descriptor for a binary mask,
-    using mahotas.features.zernike_moments.
+    Return a boolean mask of an equatorial oval region on the solar disk.
+
+    shape  : (H, W) of the image / mask (e.g. (1024, 1024) or (256, 256)).
+    center : (cy, cx) in pixels; if None -> image center.
+    radius : disk radius in pixels; if None -> min(H, W)/2.
+
+    The oval is centered on 'center' and has angular half-sizes lon_half_deg,
+    lat_half_deg, converted to pixel half-axes via R * sin(theta).
+    """
+    H, W = (1024, 1024)
+
+    if center is None:
+        cy, cx = H / 2.0, W / 2.0
+    else:
+        cy, cx = center
+
+    if radius is None:
+        radius = min(H, W) / 2.0
+
+    # convert degrees to pixel half-axes
+    lon_rad = np.deg2rad(lon_half_deg)
+    lat_rad = np.deg2rad(lat_half_deg)
+
+    a = radius * np.sin(lon_rad)  # half-width in pixels
+    b = radius * np.sin(lat_rad)  # half-height in pixels
+
+    if a <= 0 or b <= 0:
+        raise ValueError("Half-axes must be positive; check lon_half_deg/lat_half_deg")
+
+    yy, xx = np.ogrid[:H, :W]
+    dx = (xx - cx) / a
+    dy = (yy - cy) / b
+
+    oval = dx**2 + dy**2 <= 1.0  # inside ellipse
+    return oval
+
+
+def compute_zernike_descriptor(mask, oval_mask=None, degree=8):
+    """
+    Compute a Zernike-moment-based shape descriptor for a binary mask
+    representing a union of coronal-hole regions.
+
+    This version properly handles *multiple disconnected regions*
+    by treating their union as a single composite shape.
 
     Parameters
     ----------
-    mask : 2D array-like (bool or 0/1)
-        Binary mask of a single region (or union of CHs).
+    mask : 2D binary array (bool or 0/1)
+        Union of all CH pixels.
     degree : int
-        Maximum Zernike polynomial degree (typical: 6–12).
-        This 'degree' in mahotas is 'n_max' in the literature.
+        Maximum Zernike polynomial degree (n_max).
+        Typical useful range: 6–12.
 
     Returns
     -------
-    desc : np.ndarray, shape (M,)
-        Rotation-invariant Zernike descriptor (magnitudes), L2-normalized.
-        If the mask is empty, returns a zero vector of length 1.
+    desc : np.ndarray
+        Real-valued rotation-invariant Zernike descriptor.
+        L2-normalized; zero-vector if mask empty.
     """
-    mask = _ensure_binary_mask(mask)
+    # --- ensure strictly binary mask ---
+    mask = np.asarray(mask > 0, dtype=np.uint8)
 
-    # --- crop to bounding box of the region ---
+    if oval_mask is not None:
+        region = np.asarray(oval_mask, dtype=bool)
+        mask = np.logical_and(mask, region)
+
+    # --- extract union bounding box ---
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
-        # empty mask
         return np.zeros(1, dtype=float)
 
     y_min, y_max = ys.min(), ys.max()
     x_min, x_max = xs.min(), xs.max()
     cropped = mask[y_min : y_max + 1, x_min : x_max + 1]
 
+    # --- pad to square (centered) ---
     h, w = cropped.shape
-    # make it square by padding (centered)
     size = max(h, w)
     pad_y = (size - h) // 2
     pad_x = (size - w) // 2
 
     square = np.zeros((size, size), dtype=float)
-    square[pad_y : pad_y + h, pad_x : pad_x + w] = cropped.astype(float)
+    square[pad_y : pad_y + h, pad_x : pad_x + w] = cropped
 
-    # mahotas assumes the Zernike circle is centered in the image
+    # --- Zernike moments require radius = center of square ---
     radius = size // 2
 
-    # mahotas.features.zernike_moments returns a 1D array of (real) magnitudes,
-    # already rotation-invariant
+    # --- compute Zernike descriptor (rotation-invariant magnitudes) ---
     zm = mahotas.features.zernike_moments(square, radius, degree)
 
     desc = np.asarray(zm, dtype=float)
 
-    # Optional: L2 normalize to make scale of descriptor comparable across regions
+    # --- L2-normalize for numerical stability ---
     norm = np.linalg.norm(desc)
     if norm > 0:
         desc = desc / norm
@@ -78,9 +128,15 @@ def compute_zernike_descriptor(mask, degree=8):
     return desc
 
 
-def compute_fourier_descriptor(mask, num_descriptors=20, n_samples=256):
+def compute_fourier_descriptor(mask, oval_mask=None, num_descriptors=20, n_samples=256):
     """
-    Compute Fourier shape descriptor from the boundary of a binary mask.
+    Compute Fourier shape descriptor from the boundaries of a binary mask.
+
+    This version:
+      - works on the *union* of all regions,
+      - computes a descriptor for each contour,
+      - averages descriptors across all contours,
+      - keeps your original call/return semantics.
 
     Parameters
     ----------
@@ -95,91 +151,123 @@ def compute_fourier_descriptor(mask, num_descriptors=20, n_samples=256):
     -------
     desc : np.ndarray, shape (num_descriptors,)
         Rotation/translation/starting-point invariant boundary descriptor,
-        based on magnitudes of low-frequency Fourier coefficients.
+        based on magnitudes of low-frequency Fourier coefficients,
+        averaged over all contours. If the mask has no valid contours,
+        returns a zero vector of length num_descriptors.
     """
-    mask = _ensure_binary_mask(mask)
+    mask = _ensure_binary_mask(mask)  # keep your helper
 
-    # --- find contours at 0.5 ---
+    if oval_mask is not None:
+        region = np.asarray(oval_mask, dtype=bool)
+        mask = np.logical_and(mask, region)
+
+    # --- find *all* contours at level 0.5 ---
     contours = measure.find_contours(mask.astype(float), level=0.5)
+
     if len(contours) == 0:
-        # empty mask
         return np.zeros(num_descriptors, dtype=float)
 
-    # choose the longest contour (largest region)
-    contour = max(contours, key=lambda c: c.shape[0])
+    desc_list = []
 
-    # contour: array of shape (N, 2) with (row, col) = (y, x)
-    ys, xs = contour[:, 0], contour[:, 1]
+    for contour in contours:
+        # contour: array of shape (N, 2) with (row, col) = (y, x)
+        if contour.shape[0] < 10:
+            # ignore tiny/noisy contours
+            continue
 
-    # --- resample to fixed number of points along the contour length ---
-    # compute cumulative distance along contour
-    dy = np.diff(ys)
-    dx = np.diff(xs)
-    dists = np.sqrt(dx**2 + dy**2)
-    cumlen = np.concatenate([[0], np.cumsum(dists)])
-    total_len = cumlen[-1]
+        ys, xs = contour[:, 0], contour[:, 1]
 
-    if total_len == 0:
-        return np.zeros(num_descriptors, dtype=float)
+        # --- resample to fixed number of points along the contour length ---
+        dy = np.diff(ys)
+        dx = np.diff(xs)
+        dists = np.sqrt(dx**2 + dy**2)
+        cumlen = np.concatenate([[0.0], np.cumsum(dists)])
+        total_len = cumlen[-1]
 
-    # new parameterization from 0 to total_len
-    target = np.linspace(0, total_len, n_samples, endpoint=False)
-    # interpolate x(t), y(t)
-    xs_resampled = np.interp(target, cumlen, xs)
-    ys_resampled = np.interp(target, cumlen, ys)
+        if total_len == 0:
+            continue
 
-    # --- build complex sequence and normalize ---
-    z = xs_resampled + 1j * ys_resampled
+        # new parameterization from 0 to total_len
+        target = np.linspace(0.0, total_len, n_samples, endpoint=False)
+        xs_resampled = np.interp(target, cumlen, xs)
+        ys_resampled = np.interp(target, cumlen, ys)
 
-    # translation invariance: subtract centroid
-    z = z - z.mean()
+        # --- build complex sequence and normalize ---
+        z = xs_resampled + 1j * ys_resampled
 
-    # scale invariance: normalize by RMS radius
-    scale = np.sqrt(np.mean(np.abs(z) ** 2))
-    if scale > 0:
+        # translation invariance: subtract centroid
+        z = z - z.mean()
+
+        # scale invariance: normalize by RMS radius
+        scale = np.sqrt(np.mean(np.abs(z) ** 2))
+        if scale == 0:
+            continue
         z = z / scale
 
-    # --- Fourier transform along contour index ---
-    Z = np.fft.fft(z)
-    # We ignore the DC term Z[0] (translation)
-    # and use the first num_descriptors low-frequency terms.
-    # For invariance to starting point & rotation, use magnitudes.
-    # freq indices: 1..num_descriptors
-    max_k = min(num_descriptors, len(Z) // 2)
-    coeffs = Z[1 : max_k + 1]
-    desc = np.abs(coeffs)
+        # --- Fourier transform along contour index ---
+        Z = np.fft.fft(z)
 
-    # zero-pad if needed
-    if len(desc) < num_descriptors:
-        pad = np.zeros(num_descriptors - len(desc), dtype=float)
-        desc = np.concatenate([desc, pad])
+        # ignore DC term Z[0]; keep first num_descriptors low-freq terms
+        max_k = min(num_descriptors, len(Z) // 2)
+        coeffs = Z[1 : max_k + 1]
 
-    # optional second normalization
-    norm = np.linalg.norm(desc)
+        # magnitudes → rotation & starting-point invariance
+        desc = np.abs(coeffs)
+
+        # zero-pad if needed
+        if len(desc) < num_descriptors:
+            pad = np.zeros(num_descriptors - len(desc), dtype=float)
+            desc = np.concatenate([desc, pad])
+
+        # per-contour normalization (optional but stabilizing)
+        norm = np.linalg.norm(desc)
+        if norm > 0:
+            desc = desc / norm
+
+        desc_list.append(desc)
+
+    if not desc_list:
+        return np.zeros(num_descriptors, dtype=float)
+
+    # --- average descriptors over all contours ---
+    desc_stack = np.stack(desc_list, axis=0)  # (n_contours, num_descriptors)
+    desc_mean = desc_stack.mean(axis=0)
+
+    # final normalization for comparability across images
+    norm = np.linalg.norm(desc_mean)
     if norm > 0:
-        desc = desc / norm
+        desc_mean = desc_mean / norm
 
-    return desc
+    return desc_mean
 
 
-def iou(mask1, mask2):
+def iou(mask1, mask2, oval_mask=None):
     """
-    Compute Intersection-over-Union (IoU) for two binary masks.
+    Compute Intersection-over-Union (IoU) for two binary masks,
+    optionally restricted to a supplied region mask (e.g. equatorial oval).
 
     Parameters
     ----------
-    mask1, mask2 : array-like
-        2D numpy arrays. Values can be {0,1}, {0,255}, float, or bool.
+    mask1, mask2 : 2D arrays
+        Binary masks (0/1, 0/255, bool, float).
+    oval_mask : 2D bool array or None
+        If provided, IoU is computed only inside this region.
 
     Returns
     -------
     float
-        IoU value in [0,1].
+        IoU in [0,1].
     """
 
-    # Convert to boolean
+    # convert to boolean masks
     m1 = np.asarray(mask1) > 0.5
     m2 = np.asarray(mask2) > 0.5
+
+    # apply oval if supplied
+    if oval_mask is not None:
+        region = np.asarray(oval_mask, dtype=bool)
+        m1 = np.logical_and(m1, region)
+        m2 = np.logical_and(m2, region)
 
     intersection = np.logical_and(m1, m2).sum()
     union = np.logical_or(m1, m2).sum()
@@ -188,6 +276,27 @@ def iou(mask1, mask2):
         return 1.0 if intersection == 0 else 0.0
 
     return intersection / union
+
+
+def dice(mask1, mask2, oval_mask=None):
+    m1 = np.asarray(mask1) > 0.5
+    m2 = np.asarray(mask2) > 0.5
+
+    # apply oval if supplied
+    if oval_mask is not None:
+        region = np.asarray(oval_mask, dtype=bool)
+        m1 = np.logical_and(m1, region)
+        m2 = np.logical_and(m2, region)
+
+    intersection = np.logical_and(m1, m2).sum()
+    a1 = m1.sum()
+    a2 = m2.sum()
+
+    denom = a1 + a2
+    if denom == 0:
+        return 1.0
+
+    return 2.0 * intersection / denom
 
 
 def shape_distance(desc_a, desc_b, metric="l2"):
@@ -224,57 +333,89 @@ def shape_distance(desc_a, desc_b, metric="l2"):
         raise ValueError(f"Unknown metric: {metric!r}")
 
 
-def dice(mask1, mask2):
-    m1 = np.asarray(mask1) > 0.5
-    m2 = np.asarray(mask2) > 0.5
+def abs_area(mask, oval_mask):
+    """
+    Count the number of CH pixels (mask==1) inside a supplied oval mask.
 
-    intersection = np.logical_and(m1, m2).sum()
-    a1 = m1.sum()
-    a2 = m2.sum()
+    Parameters
+    ----------
+    mask : 2D array-like
+        Binary mask (0/1, 0/255, bool, float).
+    oval_mask : 2D bool array
+        Region mask produced by equatorial_oval_mask().
 
-    denom = a1 + a2
-    if denom == 0:
-        return 1.0
+    Returns
+    -------
+    int
+        Number of pixels where mask == 1 inside the oval.
+    """
 
-    return 2.0 * intersection / denom
+    # convert to boolean CH mask
+    m = np.asarray(mask) > 0.5
+
+    # restrict to oval
+    region = np.asarray(oval_mask, dtype=bool)
+
+    # count CH pixels inside oval
+    return np.logical_and(m, region).sum()
 
 
-def rect_area(mask):
-    range_x = [384, 640]
-    range_y = [256, 768]
-    return mask[range_y[0] : range_y[1], range_x[0] : range_x[1]].flatten().sum()
+def rel_area(mask, oval_mask):
+    return abs_area(mask, oval_mask) / oval_mask.sum()
 
 
-def stats(row, smoothing_params=smoothing_params, m2=None, model=None):
+def stats(
+    row,
+    smoothing_params=smoothing_params,
+    m2=None,
+    model=None,
+    oval=equatorial_oval_mask(),
+):
     m1 = prepare_mask(row.mask_path)
     if m2 is None:
+        if row.pmap_path is not None:
+            pmap = prepare_pmap(row.pmap_path)
+        else:
+            pmap = Processing.fits_to_pmap(model, prepare_fits(row.fits_path))
+
         m2 = Processing.pmap_to_mask(
-            Processing.fits_to_pmap(model, prepare_fits(row.fits_path)),
+            pmap,
             smoothing_params,
         )
 
     stats = {}
 
     stats["fourier_distance"] = shape_distance(
-        compute_fourier_descriptor(m1),
-        compute_fourier_descriptor(m2),
+        compute_fourier_descriptor(m1, oval_mask=oval),
+        compute_fourier_descriptor(m2, oval_mask=oval),
     )
 
     stats["zernike_distance"] = shape_distance(
-        compute_zernike_descriptor(m1),
-        compute_zernike_descriptor(m2),
+        compute_zernike_descriptor(m1, oval_mask=oval),
+        compute_zernike_descriptor(m2, oval_mask=oval),
     )
 
-    stats["rel_area"] = 1 - (rect_area(m2) / rect_area(m1))
+    c1 = abs_area(m1, oval)
+    c2 = abs_area(m2, oval)
 
-    stats["iou"] = iou(m1, m2)
-    stats["dice"] = dice(m1, m2)
+    if c1 + c2 == 0:
+        # both are zero; perfect match
+        stats["rel_area"] = 0.0
+    elif c1 * c2 == 0:
+        # only one is zero, 100% mismatch
+        stats["rel_area"] = 1.0
+    else:
+        # same as IoU, conceptually
+        stats["rel_area"] = 1 - (min(c1, c2) / max(c1, c2))
+
+    stats["iou"] = iou(m1, m2, oval)
+    stats["dice"] = dice(m1, m2, oval)
 
     return stats
 
 
-def print_distance(row, smoothing_params=smoothing_params):
-    s = stats(row, smoothing_params)
+def print_distance(row, model, smoothing_params=smoothing_params):
+    s = stats(row, smoothing_params, model=model)
 
     print("Fourier Distance: ", s["fourier_distance"])
     print("Zernike Distance: ", s["zernike_distance"])

@@ -12,3 +12,4 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
 
 with open(SCRIPT_DIR / "../Config/Training Params.json", "r") as f:
     model_params = json.load(f)
+    

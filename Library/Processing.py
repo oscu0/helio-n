@@ -48,8 +48,8 @@ def pmap_to_mask(pmap, smoothing_params=smoothing_params, save_path=None):
     mask = (pmap > smoothing_params["threshold"]).astype(np.float32)
 
     # --- morphological smoothing ---
-    if smoothing_params["closing_radius"] > 0:
-        mask = binary_closing(mask, disk(smoothing_params["closing_radius"]))
+    # if smoothing_params["closing_radius"] > 0:
+    mask = binary_closing(mask, disk(smoothing_params["closing_radius"]))
 
     if smoothing_params["min_size"] > 0:
         mask = remove_small_objects(mask, min_size=smoothing_params["min_size"])

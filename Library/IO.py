@@ -78,62 +78,132 @@ def prepare_hmi_jpg(
 
     return arr
 
+def prepare_pmap(path):
+    # very complex and useful function
+    return np.load(path)
 
-def prepare_dataset(fits_root, masks_root):
+
+def prepare_dataset(
+    fits_root, masks_root, pmaps_root=None, out_parquet="./Data/df.parquet"
+):
+    """
+    Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
+
+    Returns
+    -------
+    matches : DataFrame
+        Rows where FITS + mask + pmap (pmap_path may be empty if pmaps_root is None or missing).
+        Index is the key (timestamp string).
+        Columns: fits_path, mask_path, pmap_path
+    fits_only : DataFrame
+        Rows with FITS present but neither mask nor pmap.
+    masks_only : DataFrame
+        Rows with mask present but neither fits nor pmap.
+    pmaps_only : DataFrame
+        Rows with pmap present but neither fits nor mask (empty if pmaps_root is None).
+    partials : DataFrame
+        Rows where exactly two of the three are present (fits+mask, fits+pmap, mask+pmap).
+    """
+
     def index(p):
-        return p.split("/")[-1][3:16]
+        return os.path.basename(p)[3:16]
 
-    # Collect all FITS and masks
+    # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
     mask_files = glob.glob(
         os.path.join(masks_root, "**", "*_CH_MASK_FINAL.png"), recursive=True
     )
 
     df_fits = pd.DataFrame(
-        {
-            "key": [index(p) for p in fits_files],
-            "fits_path": fits_files,
-        }
+        {"key": [index(p) for p in fits_files], "fits_path": fits_files}
     )
-
     df_masks = pd.DataFrame(
-        {
-            "key": [index(p) for p in mask_files],
-            "mask_path": mask_files,
-        }
+        {"key": [index(p) for p in mask_files], "mask_path": mask_files}
     )
 
-    # Optional: detect duplicate keys (same timestamp, multiple files)
+    # Optional pmaps
+    if pmaps_root is not None:
+        pmap_files = glob.glob(
+            os.path.join(pmaps_root, "**", "*_UNET_PMAP.npy"), recursive=True
+        )
+    else:
+        pmap_files = []
+    df_pmaps = pd.DataFrame(
+        {"key": [index(p) for p in pmap_files], "pmap_path": pmap_files}
+    )
+
+    # Report duplicates
     dup_fits = df_fits[df_fits.duplicated("key", keep=False)]
     dup_masks = df_masks[df_masks.duplicated("key", keep=False)]
+    dup_pmaps = df_pmaps[df_pmaps.duplicated("key", keep=False)]
 
     if not dup_fits.empty:
         print("⚠ Duplicate keys in FITS:")
         print(dup_fits.sort_values("key"))
-
     if not dup_masks.empty:
         print("⚠ Duplicate keys in masks:")
         print(dup_masks.sort_values("key"))
+    if not dup_pmaps.empty:
+        print("⚠ Duplicate keys in PMAPs:")
+        print(dup_pmaps.sort_values("key"))
 
+    # Keep first occurrence for simplicity
     df_fits = df_fits.drop_duplicates("key", keep="first")
     df_masks = df_masks.drop_duplicates("key", keep="first")
+    df_pmaps = df_pmaps.drop_duplicates("key", keep="first")
 
-    # Outer join to see everything in one table
-    merged = df_fits.merge(df_masks, on="key", how="outer", indicator=True)
+    # Full outer join of three tables
+    merged = df_fits.merge(df_masks, on="key", how="outer")
+    merged = merged.merge(df_pmaps, on="key", how="outer")
 
-    matches = merged[merged["_merge"] == "both"].copy()
-    fits_only = merged[merged["_merge"] == "left_only"].copy()
-    masks_only = merged[merged["_merge"] == "right_only"].copy()
+    # Flags
+    has_fits = merged["fits_path"].notna()
+    has_mask = merged["mask_path"].notna()
+    has_pmap = merged["pmap_path"].notna()
 
-    for df in (matches, fits_only, masks_only):
-        df.drop(columns=["_merge"], inplace=True)
+    # Categories
+    fits_only = merged[has_fits & ~has_mask & ~has_pmap].copy()
+    masks_only = merged[~has_fits & has_mask & ~has_pmap].copy()
+    pmaps_only = merged[~has_fits & ~has_mask & has_pmap].copy()
 
-    matches.set_index(matches.key, inplace=True, drop=True)
-    matches.drop(["key"], axis=1, inplace=True)
-    matches["pmap_path"] = ""
+    # Prepare "matches" DataFrame similar to previous API: use all_three primarily,
+    # but include rows where pmap may be empty if pmaps_root not provided.
+    # We'll create a canonical matches DF that contains any row that has at least fits and mask,
+    # and include pmap_path if present (empty string otherwise).
+    matches = merged[has_fits & has_mask].copy()
+    # Evil pandas moment
+    matches["pmap_path"] = matches["pmap_path"].fillna(np.nan).replace([np.nan], [None])
 
-    matches.to_parquet("./Data/df.parquet")
-    fits_only.to_csv("./Data/fits_only.csv")
-    masks_only.to_csv("./Data/masks_only.csv")
+    # Convert index to the key (timestamp string) for matches
+    matches.set_index(matches["key"], inplace=True, drop=True)
+    matches.drop(columns=["key"], inplace=True)
 
-    return matches, fits_only, masks_only
+    # For the convenience CSVs/parquet, drop the helper merges index column if present
+    for df, path, name in [
+        (fits_only, "./Data/fits_only.csv", "fits_only"),
+        (masks_only, "./Data/masks_only.csv", "masks_only"),
+        (pmaps_only, "./Data/pmaps_only.csv", "pmaps_only"),
+    ]:
+        # ensure we don't fail when a category is empty
+        try:
+            df.drop(columns=["key"], inplace=True)
+        except Exception:
+            pass
+        try:
+            df.to_csv(path)
+        except Exception:
+            # if writing fails (e.g. empty), ignore
+            pass
+
+    # Save matches to parquet (if desired)
+    try:
+        matches.to_parquet(out_parquet)
+    except Exception:
+        pass
+
+    # Return core results
+    return matches, {
+        "fits_only": fits_only,
+        "masks_only": masks_only,
+        "pmaps_only": pmaps_only,
+    }
