@@ -68,8 +68,6 @@ def pmap_to_mask(pmap, smoothing_params=smoothing_params, save_path=None):
     return (arr > 127).astype(np.float32)
 
 
-    return mask_bin
-
 
 def save_pmap(model, row, pmap=None):
     path = row.mask_path.replace("CH_MASK_FINAL.png", "UNET_PMAP.npy")

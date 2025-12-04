@@ -1,13 +1,13 @@
-from Config import *
-
-import numpy as np
-
-
-from skimage import measure
+import astropy.units as u
 import mahotas
+import numpy as np
+import sunpy.map
+from skimage import measure
+from sunpy.coordinates import frames
 
-from Library.Config import *
+from Config import *
 from Library import Processing
+from Library.Config import *
 from Library.IO import prepare_fits, prepare_mask, prepare_pmap
 
 
@@ -21,51 +21,26 @@ def _ensure_binary_mask(mask):
     return mask > 0.5
 
 
-def equatorial_oval_mask(
-    lon_half_deg=15.0,  # half-width in longitude, degrees
-    lat_half_deg=30.0,  # half-height in latitude, degrees
-    center=None,
-    radius=None,
-):
-    """
-    Return a boolean mask of an equatorial oval region on the solar disk.
+def generate_omask(row, lon_half=20, lat_half=40):
+    m = sunpy.map.Map(row.fits_path)
+    ny, nx = m.data.shape
 
-    shape  : (H, W) of the image / mask (e.g. (1024, 1024) or (256, 256)).
-    center : (cy, cx) in pixels; if None -> image center.
-    radius : disk radius in pixels; if None -> min(H, W)/2.
+    # Pixel grid (row = y, col = x)
+    yy, xx = np.mgrid[0:ny, 0:nx]
 
-    The oval is centered on 'center' and has angular half-sizes lon_half_deg,
-    lat_half_deg, converted to pixel half-axes via R * sin(theta).
-    """
-    H, W = (1024, 1024)
+    # Pixel -> world (Helioprojective → Helio. Stonyhurst)
+    coords = m.pixel_to_world(xx * u.pix, yy * u.pix)
+    hgs = coords.transform_to(frames.HeliographicStonyhurst)
 
-    if center is None:
-        cy, cx = H / 2.0, W / 2.0
-    else:
-        cy, cx = center
+    # Angles in degrees
+    lon_deg = hgs.lon.to(u.deg).value  # [-180, 180]
+    lat_deg = hgs.lat.to(u.deg).value  # [-90, 90]
 
-    if radius is None:
-        radius = min(H, W) / 2.0
-
-    # convert degrees to pixel half-axes
-    lon_rad = np.deg2rad(lon_half_deg)
-    lat_rad = np.deg2rad(lat_half_deg)
-
-    a = radius * np.sin(lon_rad)  # half-width in pixels
-    b = radius * np.sin(lat_rad)  # half-height in pixels
-
-    if a <= 0 or b <= 0:
-        raise ValueError("Half-axes must be positive; check lon_half_deg/lat_half_deg")
-
-    yy, xx = np.ogrid[:H, :W]
-    dx = (xx - cx) / a
-    dy = (yy - cy) / b
-
-    oval = dx**2 + dy**2 <= 1.0  # inside ellipse
-    return oval
+    omask = (lon_deg / lon_half) ** 2 + (lat_deg / lat_half) ** 2 <= 1.0
+    return omask
 
 
-def compute_zernike_descriptor(mask, oval_mask=None, degree=8):
+def compute_zernike_descriptor(mask, omask=None, degree=8):
     """
     Compute a Zernike-moment-based shape descriptor for a binary mask
     representing a union of coronal-hole regions.
@@ -90,8 +65,8 @@ def compute_zernike_descriptor(mask, oval_mask=None, degree=8):
     # --- ensure strictly binary mask ---
     mask = np.asarray(mask > 0, dtype=np.uint8)
 
-    if oval_mask is not None:
-        region = np.asarray(oval_mask, dtype=bool)
+    if omask is not None:
+        region = np.asarray(omask, dtype=bool)
         mask = np.logical_and(mask, region)
 
     # --- extract union bounding box ---
@@ -128,7 +103,7 @@ def compute_zernike_descriptor(mask, oval_mask=None, degree=8):
     return desc
 
 
-def compute_fourier_descriptor(mask, oval_mask=None, num_descriptors=20, n_samples=256):
+def compute_fourier_descriptor(mask, omask=None, num_descriptors=20, n_samples=256):
     """
     Compute Fourier shape descriptor from the boundaries of a binary mask.
 
@@ -157,8 +132,8 @@ def compute_fourier_descriptor(mask, oval_mask=None, num_descriptors=20, n_sampl
     """
     mask = _ensure_binary_mask(mask)  # keep your helper
 
-    if oval_mask is not None:
-        region = np.asarray(oval_mask, dtype=bool)
+    if omask is not None:
+        region = np.asarray(omask, dtype=bool)
         mask = np.logical_and(mask, region)
 
     # --- find *all* contours at level 0.5 ---
@@ -241,7 +216,7 @@ def compute_fourier_descriptor(mask, oval_mask=None, num_descriptors=20, n_sampl
     return desc_mean
 
 
-def iou(mask1, mask2, oval_mask=None):
+def iou(mask1, mask2, omask=None):
     """
     Compute Intersection-over-Union (IoU) for two binary masks,
     optionally restricted to a supplied region mask (e.g. equatorial oval).
@@ -250,7 +225,7 @@ def iou(mask1, mask2, oval_mask=None):
     ----------
     mask1, mask2 : 2D arrays
         Binary masks (0/1, 0/255, bool, float).
-    oval_mask : 2D bool array or None
+    omask : 2D bool array or None
         If provided, IoU is computed only inside this region.
 
     Returns
@@ -264,8 +239,8 @@ def iou(mask1, mask2, oval_mask=None):
     m2 = np.asarray(mask2) > 0.5
 
     # apply oval if supplied
-    if oval_mask is not None:
-        region = np.asarray(oval_mask, dtype=bool)
+    if omask is not None:
+        region = np.asarray(omask, dtype=bool)
         m1 = np.logical_and(m1, region)
         m2 = np.logical_and(m2, region)
 
@@ -278,13 +253,13 @@ def iou(mask1, mask2, oval_mask=None):
     return intersection / union
 
 
-def dice(mask1, mask2, oval_mask=None):
+def dice(mask1, mask2, omask=None):
     m1 = np.asarray(mask1) > 0.5
     m2 = np.asarray(mask2) > 0.5
 
     # apply oval if supplied
-    if oval_mask is not None:
-        region = np.asarray(oval_mask, dtype=bool)
+    if omask is not None:
+        region = np.asarray(omask, dtype=bool)
         m1 = np.logical_and(m1, region)
         m2 = np.logical_and(m2, region)
 
@@ -333,7 +308,8 @@ def shape_distance(desc_a, desc_b, metric="l2"):
         raise ValueError(f"Unknown metric: {metric!r}")
 
 
-def abs_area(mask, oval_mask):
+
+def abs_area(mask, omask):
     """
     Count the number of CH pixels (mask==1) inside a supplied oval mask.
 
@@ -341,8 +317,8 @@ def abs_area(mask, oval_mask):
     ----------
     mask : 2D array-like
         Binary mask (0/1, 0/255, bool, float).
-    oval_mask : 2D bool array
-        Region mask produced by equatorial_oval_mask().
+    omask : 2D bool array
+        Region mask produced by generate_omask().
 
     Returns
     -------
@@ -354,14 +330,14 @@ def abs_area(mask, oval_mask):
     m = np.asarray(mask) > 0.5
 
     # restrict to oval
-    region = np.asarray(oval_mask, dtype=bool)
+    region = np.asarray(omask, dtype=bool)
 
     # count CH pixels inside oval
     return np.logical_and(m, region).sum()
 
 
-def rel_area(mask, oval_mask):
-    return abs_area(mask, oval_mask) / oval_mask.sum()
+def rel_area(mask, omask):
+    return abs_area(mask, omask) / omask.sum()
 
 
 def stats(
@@ -369,8 +345,11 @@ def stats(
     smoothing_params=smoothing_params,
     m2=None,
     model=None,
-    oval=equatorial_oval_mask(),
+    oval=None,
 ):
+    if oval is None:
+        oval = generate_omask(row)
+
     m1 = prepare_mask(row.mask_path)
     if m2 is None:
         if row.pmap_path is not None:
@@ -386,13 +365,13 @@ def stats(
     stats = {}
 
     stats["fourier_distance"] = shape_distance(
-        compute_fourier_descriptor(m1, oval_mask=oval),
-        compute_fourier_descriptor(m2, oval_mask=oval),
+        compute_fourier_descriptor(m1, omask=oval),
+        compute_fourier_descriptor(m2, omask=oval),
     )
 
     stats["zernike_distance"] = shape_distance(
-        compute_zernike_descriptor(m1, oval_mask=oval),
-        compute_zernike_descriptor(m2, oval_mask=oval),
+        compute_zernike_descriptor(m1, omask=oval),
+        compute_zernike_descriptor(m2, omask=oval),
     )
 
     c1 = abs_area(m1, oval)
