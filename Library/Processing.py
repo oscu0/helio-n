@@ -17,7 +17,7 @@ from Library.Config import *
 from Library.IO import prepare_fits
 
 
-def fits_to_pmap(model, img2d, img_size=model_params["img_size"]):
+def fits_to_pmap(model, img2d, img_size=1024):
     img = np.asarray(img2d, dtype=np.float32)
 
     if img.ndim != 2:
@@ -36,7 +36,7 @@ def fits_to_pmap(model, img2d, img_size=model_params["img_size"]):
     return prob
 
 
-def pmap_to_mask(pmap, smoothing_params=smoothing_params, save_path=None):
+def pmap_to_mask(pmap, smoothing_params=no_smoothing, save_path=None):
     """
     Convert a probability map into a cleaned binary mask (0/1 float32),
     matching the semantics of prepare_mask(preserve_255=False).

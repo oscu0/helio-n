@@ -15,3 +15,5 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
         paths = p[p.keys()[0]]  # Default to first entry if hostname not found
 
 paths["artifact_root"] = "./Outputs/Artifacts/" + hostname + "/"
+
+no_smoothing = json.load(open("./Config/Postprocessing/P0.json"))
