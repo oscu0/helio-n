@@ -17,7 +17,7 @@ import pandas as pd
 
 from Library.Model import load_trained_model
 from Library.Processing import *
-from Library.Plot import save_ch_map_unet
+from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.Config import *
 from Library.Config import paths
 
@@ -39,8 +39,12 @@ else:
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Generating pmaps"):
         try:
             path, pmap = save_pmap(model, row)  # your existing function
+            mask = pmap_to_mask(
+                pmap, smoothing_params=get_postprocessing_params(postprocessing)
+            )
             save_ch_map_unet(row, model, pmap=pmap, postprocessing=postprocessing)
             save_ch_map_unet(row, model, pmap=pmap, postprocessing="P0")
+            save_ch_mask_only_unet(row, model, pmap=pmap, postprocessing=postprocessing)
 
         except Exception as e:
             print(f"Error processing {row.name}: {e}")
