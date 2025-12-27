@@ -1,5 +1,14 @@
 {
-    "fits_root": "/Volumes/JetDrive 330/SDO Data/FITS",
-    "masks_root": "/Volumes/JetDrive 330/SDO Data/Masks",
-    "model_path": "./Outputs/U-Net.keras"
+    "risc1": {
+        "fits_root": "/Volumes/JetDrive 330/SDO Data/FITS",
+        "masks_root": "/Volumes/JetDrive 330/SDO Data/Masks",
+        "hmi_root": "/Volumes/JetDrive 330/SDO Data/HMI",
+        "model_path": "./Outputs/U-Net.keras"
+    },
+    "miracle": {
+        "fits_root": "/mnt/sun/sdo/aia/L0/0193",
+        "masks_root": "/mnt/sun/sdo/helio-n/masks/chsun/0193",
+        "hmi_root": "/mnt/sun/sdo/hmi/fits",
+        "model_path": "./Outputs/U-Net.keras"
+    }
 }
