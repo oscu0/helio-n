@@ -87,7 +87,13 @@ def prepare_pmap(path):
 
 
 def prepare_dataset(
-    fits_root, masks_root, pmaps_root=-1, hmi_root=None, out_parquet=paths['artifact_root'] + "Paths.parquet"
+    fits_root,
+    masks_root,
+    pmaps_root=-1,
+    architecture="A1",
+    date_range="D1",
+    hmi_root=None,
+    out_parquet=paths["artifact_root"] + "Paths.parquet",
 ):
     """
     Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
@@ -113,14 +119,14 @@ def prepare_dataset(
 
     def index(p):
         return os.path.basename(p)[3:16]
-    
+
     def index_hmi(p):
         return os.path.basename(p)[15:28]
 
     # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
     mask_files = glob.glob(
-        os.path.join(masks_root, "**", "*_CH_MASK_FINAL.png"), recursive=True
+        os.path.join(masks_root, "**", "*_CH_MASK.png"), recursive=True
     )
 
     df_fits = pd.DataFrame(
@@ -133,7 +139,10 @@ def prepare_dataset(
     # Optional
     if pmaps_root is not None:
         pmap_files = glob.glob(
-            os.path.join(pmaps_root, "**", "*_UNET_PMAP.npy"), recursive=True
+            os.path.join(
+                pmaps_root, "**", "*_CH_" + architecture + date_range + "PX" + ".npy"
+            ),
+            recursive=True,
         )
     else:
         pmap_files = []
@@ -147,7 +156,9 @@ def prepare_dataset(
     else:
         hmi_files = []
 
-    df_hmi = pd.DataFrame({"key": [index_hmi(p) for p in hmi_files], "hmi_path": hmi_files})
+    df_hmi = pd.DataFrame(
+        {"key": [index_hmi(p) for p in hmi_files], "hmi_path": hmi_files}
+    )
 
     # Report duplicates
     dup_fits = df_fits[df_fits.duplicated("key", keep=False)]
@@ -166,7 +177,7 @@ def prepare_dataset(
         print(dup_pmaps.sort_values("key"))
     if not dup_hmi.empty:
         print("⚠ Duplicate keys in HMI:")
-        print(dup_hmi.sort_values("key"))   
+        print(dup_hmi.sort_values("key"))
 
     # Keep first occurrence for simplicity
     df_fits = df_fits.drop_duplicates("key", keep="first")

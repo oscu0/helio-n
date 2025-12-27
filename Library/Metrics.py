@@ -308,7 +308,6 @@ def shape_distance(desc_a, desc_b, metric="l2"):
         raise ValueError(f"Unknown metric: {metric!r}")
 
 
-
 def abs_area(mask, omask):
     """
     Count the number of CH pixels (mask==1) inside a supplied oval mask.
@@ -342,7 +341,7 @@ def rel_area(mask, omask):
 
 def stats(
     row,
-    smoothing_params=smoothing_params,
+    smoothing_params=Processing.get_postprocessing_params("P0"),
     m2=None,
     model=None,
     oval=None,
@@ -393,7 +392,9 @@ def stats(
     return stats
 
 
-def print_distance(row, model, smoothing_params=smoothing_params):
+def print_distance(
+    row, model, smoothing_params=Processing.get_postprocessing_params("P0")
+):
     s = stats(row, smoothing_params, model=model)
 
     print("Fourier Distance: ", s["fourier_distance"])

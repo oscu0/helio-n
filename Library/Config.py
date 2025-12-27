@@ -16,4 +16,5 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
 
 paths["artifact_root"] = "./Outputs/Artifacts/" + hostname + "/"
 
-no_smoothing = json.load(open("./Config/Postprocessing/P0.json"))
+TARGET_PX = 1024
+DPI = 128

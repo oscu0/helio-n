@@ -47,7 +47,7 @@ def ch_abs_area(row, reference_mode=False, oval=True):
         ch_mask_map = prepare_mask(row.mask_path)
     else:
         ch_mask_map = Processing.pmap_to_mask(
-            prepare_pmap(row.pmap_path), smoothing_params=no_smoothing
+            prepare_pmap(row.pmap_path), smoothing_params=Processing.get_postprocessing_params("P0")
         )
 
     if oval:

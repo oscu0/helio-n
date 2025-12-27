@@ -12,6 +12,10 @@ from skimage.morphology import (
 )
 from skimage.transform import resize
 
+from pathlib import Path
+
+MODULE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
 
 from Library.Config import *
 from Library.IO import prepare_fits
@@ -36,7 +40,16 @@ def fits_to_pmap(model, img2d, img_size=1024):
     return prob
 
 
-def pmap_to_mask(pmap, smoothing_params=no_smoothing, save_path=None):
+def get_postprocessing_params(postprocessing):
+    config = json.load(
+        open(PROJECT_ROOT + "Config/Postprocessing/" + postprocessing + ".json")
+    )
+    return config
+
+
+def pmap_to_mask(
+    pmap, smoothing_params=get_postprocessing_params("P0"), save_path=None
+):
     """
     Convert a probability map into a cleaned binary mask (0/1 float32),
     matching the semantics of prepare_mask(preserve_255=False).
@@ -67,12 +80,12 @@ def pmap_to_mask(pmap, smoothing_params=no_smoothing, save_path=None):
     return (arr > 127).astype(np.float32)
 
 
-def save_pmap(model_obj, row, pmap=None):
+def save_pmap(model, row, pmap=None):
     path = row.mask_path.replace(
-        "CH_MASK_FINAL.png",
-        model_obj.architecture_id + model_obj.date_range_id + "PX" + "_UNET_PMAP.npy",
+        "CH_MASK.png",
+        model.architecture_id + model.date_range_id + "PX" + ".npy",
     )
     if pmap is None:
-        pmap = fits_to_pmap(model_obj, prepare_fits(row.fits_path))
+        pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
     np.save(path, pmap)
-    return path
+    return path, pmap
