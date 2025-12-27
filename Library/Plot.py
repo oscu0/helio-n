@@ -245,8 +245,7 @@ def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None):
         source="unet",
         pmap=pmap,
         model=model,
-        postprocessing=postprocessing,
-        set_title=False,
+        postprocessing=postprocessing
     )
 
     out_path = row.mask_path.replace(
