@@ -87,7 +87,7 @@ def prepare_pmap(path):
 
 
 def prepare_dataset(
-    fits_root, masks_root, pmaps_root=-1, hmi_root=None, out_parquet=paths['artifact_root'] + "df.parquet"
+    fits_root, masks_root, pmaps_root=-1, hmi_root=None, out_parquet=paths['artifact_root'] + "Paths.parquet"
 ):
     """
     Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
