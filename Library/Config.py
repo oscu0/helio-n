@@ -7,9 +7,6 @@ hostname = socket.gethostname()
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-with open(SCRIPT_DIR / "../Config/Smoothing Params.json", "r") as f:
-    smoothing_params = json.load(f)
-
 with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
     p = json.load(f)
     if hostname in p:
@@ -17,5 +14,4 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
     else:
         paths = p[p.keys()[0]]  # Default to first entry if hostname not found
 
-paths['artifact_root'] = "./Outputs/Artifacts/" + hostname + "/"
-
+paths["artifact_root"] = "./Outputs/Artifacts/" + hostname + "/"
