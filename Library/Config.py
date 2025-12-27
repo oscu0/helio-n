@@ -19,5 +19,3 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
 
 paths['artifact_root'] = "./Outputs/Artifacts/" + hostname + "/"
 
-with open(SCRIPT_DIR / "../Config/Training Params.json", "r") as f:
-    model_params = json.load(f)

@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 
 from Library.Config import paths
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 
 import sys
 

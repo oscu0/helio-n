@@ -5,6 +5,11 @@ import os
 
 import PIL
 
+from pathlib import Path
+
+MODULE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
+
 os.environ["KERAS_BACKEND"] = "jax"
 import keras
 
@@ -12,7 +17,7 @@ import keras
 from keras import layers, ops
 
 from Library import IO
-from Library.Config import model_params
+from Library.Config import paths
 
 
 def augment_pair(img, mask):
@@ -28,7 +33,8 @@ def augment_pair(img, mask):
 
     return img, mask
 
-def load_pair(fits_path, mask_path):
+
+def load_pair(fits_path, mask_path, model_params):
     # decode paths if coming in as bytes
     if isinstance(fits_path, (bytes, np.bytes_)):
         fits_path = fits_path.decode("utf-8")
@@ -55,7 +61,8 @@ def load_pair(fits_path, mask_path):
 
     return img, mask
 
-def pair_generator(fits_paths, mask_paths, augment=False):
+
+def pair_generator(fits_paths, mask_paths, model_params, augment=False):
     n = len(fits_paths)
     idxs = np.arange(n)
 
@@ -79,6 +86,7 @@ def pair_generator(fits_paths, mask_paths, augment=False):
             Y = np.stack(masks, axis=0).astype(np.float32)  # (B, H, W, 1)
             yield X, Y
 
+
 def double_conv(x, filters):
     x = layers.Conv2D(filters, 3, padding="same")(x)
     x = layers.BatchNormalization()(x)
@@ -88,9 +96,12 @@ def double_conv(x, filters):
     x = layers.ReLU()(x)
     return x
 
+
 def build_unet(
-    input_shape=(model_params["img_size"], model_params["img_size"], 1), base_filters=32
+    model_params,
 ):
+    input_shape = (model_params["img_size"], model_params["img_size"], 1)
+    base_filters = model_params["base_filters"]
     inputs = keras.Input(shape=input_shape)
 
     # ----- Encoder -----
@@ -141,6 +152,7 @@ def build_unet(
     model = keras.Model(inputs, outputs, name="CH_UNet_5lvl")
     return model
 
+
 def dice_coef(y_true, y_pred, smooth=1.0):
     # flatten per-sample
     y_true_f = ops.reshape(y_true, (ops.shape(y_true)[0], -1))
@@ -158,7 +170,8 @@ def bce_dice_loss(y_true, y_pred):
     dice_loss = 1.0 - dice_coef(y_true, y_pred)
     return 0.4 * ops.mean(bce) + 0.6 * dice_loss
 
-def train_model(pairs_df):
+
+def train_model(pairs_df, model_params, keep_every=3, path=None):
     fits_paths = pairs_df["fits_path"].astype(str).tolist()
     mask_paths = pairs_df["mask_path"].astype(str).tolist()
 
@@ -181,9 +194,9 @@ def train_model(pairs_df):
     val_fits = fits_paths[n_train:]
     val_masks = mask_paths[n_train:]
 
-    # --- use every 3rd training sample ---
-    train_fits = train_fits[::3]
-    train_masks = train_masks[::3]
+    # --- use every Nth training sample ---
+    train_fits = train_fits[::keep_every]
+    train_masks = train_masks[::keep_every]
 
     # steps per epoch (integer)
     steps_per_epoch = max(1, n_train // model_params["batch_size"])
@@ -193,15 +206,19 @@ def train_model(pairs_df):
         train_fits,
         train_masks,
         augment=True,
+        model_params=model_params,
     )
 
     val_gen = pair_generator(
         val_fits,
         val_masks,
         augment=False,
+        model_params=model_params,
     )
 
-    model = build_unet(base_filters=80)  # must be built with keras.layers, not tf.keras
+    model = build_unet(
+        model_params=model_params
+    )  # must be built with keras.layers, not tf.keras
 
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=model_params["learning_rate"]),
@@ -240,7 +257,23 @@ def train_model(pairs_df):
         callbacks=callbacks,
     )
 
-def load_trained_model(path):
+    if path is None:
+        return model
+    else:
+        model.save(path)
+        return path
+
+
+def load_trained_model(architecture, date_range):
+    architecture_json = json.load(
+        open(PROJECT_ROOT + "Config/Model/Architecture/" + architecture + ".json")
+    )
+    date_range_json = json.load(
+        open(PROJECT_ROOT + "Config/Model/Date Range/" + date_range + ".json")
+    )
+    path = PROJECT_ROOT + "Outputs/Models/" + architecture + date_range + ".keras"
+    print(path, architecture_json, date_range_json)
+
     custom_objects = {
         "bce_dice_loss": bce_dice_loss,
         "dice_coef": dice_coef,

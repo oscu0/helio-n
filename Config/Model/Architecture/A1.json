@@ -1,0 +1,7 @@
+{
+    "base_filters": 80,
+    "img_size": 256,
+    "batch_size": 4,
+    "num_epochs": 30,
+    "learning_rate": 0.0001
+}
