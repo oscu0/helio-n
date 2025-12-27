@@ -17,5 +17,7 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
     else:
         paths = p[p.keys()[0]]  # Default to first entry if hostname not found
 
+paths['artifact_root'] = "./Outputs/Artifacts/" + hostname + "/"
+
 with open(SCRIPT_DIR / "../Config/Training Params.json", "r") as f:
     model_params = json.load(f)

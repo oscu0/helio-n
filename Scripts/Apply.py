@@ -20,11 +20,12 @@ from pathlib import Path
 from Library.Model import load_trained_model
 from Library.Processing import *
 from Library.Config import *
+from Library.Config import paths
 
 
 model = load_trained_model(paths["model_path"])
 
-df = pd.read_parquet("./Data/df.parquet")
+df = pd.read_parquet(paths["artifact_root"] + "df.parquet")
 
 df = df[start:end]
 

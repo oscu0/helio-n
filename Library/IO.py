@@ -9,6 +9,8 @@ import PIL
 from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_disk
 import sunpy.map
 
+from Library.Config import paths
+
 
 def mask_fits(f):
     hpc_coords = all_coordinates_from_map(f)
@@ -85,7 +87,7 @@ def prepare_pmap(path):
 
 
 def prepare_dataset(
-    fits_root, masks_root, pmaps_root=-1, hmi_root=None, out_parquet="./Data/df.parquet"
+    fits_root, masks_root, pmaps_root=-1, hmi_root=None, out_parquet=paths['artifact_root'] + "df.parquet"
 ):
     """
     Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
@@ -204,10 +206,10 @@ def prepare_dataset(
 
     # For the convenience CSVs/parquet, drop the helper merges index column if present
     for df, path, name in [
-        (fits_only, "./Data/fits_only.csv", "fits_only"),
-        (masks_only, "./Data/masks_only.csv", "masks_only"),
-        (pmaps_only, "./Data/pmaps_only.csv", "pmaps_only"),
-        (hmi_only, "./Data/hmi_only.csv", "hmi_only"),
+        (fits_only, paths["artifact_root"] + "FITS Only.csv", "fits_only"),
+        (masks_only, paths["artifact_root"] + "Masks Only.csv", "masks_only"),
+        (pmaps_only, paths["artifact_root"] + "PMAPs Only.csv", "pmaps_only"),
+        (hmi_only, paths["artifact_root"] + "HMI Only.csv", "hmi_only"),
     ]:
         # ensure we don't fail when a category is empty
         try:
