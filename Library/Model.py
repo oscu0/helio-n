@@ -278,5 +278,47 @@ def load_trained_model(architecture, date_range):
         "bce_dice_loss": bce_dice_loss,
         "dice_coef": dice_coef,
     }
-    model = keras.models.load_model(path, custom_objects=custom_objects)
+    
+    model = HelioNModel(
+        keras.models.load_model(path, custom_objects=custom_objects),
+        architecture,
+        date_range
+    )
+
     return model
+
+
+class HelioNModel:
+    def __init__(
+        self,
+        model,
+        architecture_id: str,
+        date_range_id: str,
+        *,
+        arch_dir="Config/Model/Architecture",
+        date_dir="Config/Model/Date Range",
+        root=".",
+    ):
+        self.model = model
+
+        self.architecture_id = architecture_id
+        self.date_range_id = date_range_id
+
+        root = Path(root).resolve()
+
+        self.architecture_path = root / arch_dir / f"{architecture_id}.json"
+        self.date_range_path = root / date_dir / f"{date_range_id}.json"
+
+        self.architecture = self._read_json(self.architecture_path)
+        self.date_range = self._read_json(self.date_range_path)
+
+    @staticmethod
+    def _read_json(path: Path) -> dict:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def __str__(self):
+        return "Wrapped model " + self.architecture_id + self.date_range_id
+    
+    def __repr__(self):
+        return self.__str__()

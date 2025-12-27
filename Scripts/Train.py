@@ -4,10 +4,10 @@ from pathlib import Path
 
 BASE_DIR = str(Path(__file__).resolve().parent.parent) + "/"
 
-architecture = sys.argv[1]
-date_range = sys.argv[2]
+architecture_id = sys.argv[1]
+date_range_id = sys.argv[2]
 
-if date_range is None or architecture is None:
+if date_range_id is None or architecture_id is None:
     print(
         "Usage: ./Train.py <experiment>, where <experiment> is the name of a config in Config/Model/Date Range/"
     )
@@ -23,20 +23,20 @@ from Library import Model
 import pandas as pd
 import json
 
-date_range_json = json.load(
-    open(BASE_DIR + "Config/Model/Date Range/" + (date_range + ".json"))
+date_range = json.load(
+    open(BASE_DIR + "Config/Model/Date Range/" + (date_range_id + ".json"))
 )
 
-architecture_json = json.load(
-    open(BASE_DIR + "Config/Model/Architecture/" + (architecture + ".json"))
+architecture = json.load(
+    open(BASE_DIR + "Config/Model/Architecture/" + (architecture_id + ".json"))
 )
 
 df = pd.read_parquet(paths["artifact_root"] + "Paths.parquet")
-train_df = df[date_range_json["start"] : date_range_json["end"]]
+train_df = df[date_range["start"] : date_range["end"]]
 
 Model.train_model(
     train_df,
-    keep_every=date_range_json["keep_every"],
-    model_params=architecture_json,
-    path=BASE_DIR + "Outputs/Models" + (architecture + date_range) + ".keras",
+    keep_every=date_range["keep_every"],
+    model_params=architecture,
+    path=BASE_DIR + "Outputs/Models" + (architecture_id + date_range_id) + ".keras",
 )

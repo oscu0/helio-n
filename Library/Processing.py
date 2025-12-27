@@ -31,7 +31,7 @@ def fits_to_pmap(model, img2d, img_size=1024):
 
     x = img[np.newaxis, ..., np.newaxis]  # (1, H, W, 1)
 
-    prob = model.predict(x, verbose=0)[0, ..., 0]
+    prob = model.model.predict(x, verbose=0)[0, ..., 0]
 
     return prob
 
@@ -57,7 +57,6 @@ def pmap_to_mask(pmap, smoothing_params=no_smoothing, save_path=None):
     if smoothing_params["hole_size"] > 0:
         mask = remove_small_holes(mask, area_threshold=smoothing_params["hole_size"])
 
-
     mask_u8 = (mask > 0.5).astype(np.uint8) * 255
     img = PIL.Image.fromarray(mask_u8, mode="L")
     if img.size != (1024, 1024):
@@ -68,10 +67,12 @@ def pmap_to_mask(pmap, smoothing_params=no_smoothing, save_path=None):
     return (arr > 127).astype(np.float32)
 
 
-
-def save_pmap(model, row, pmap=None):
-    path = row.mask_path.replace("CH_MASK_FINAL.png", "UNET_PMAP.npy")
+def save_pmap(model_obj, row, pmap=None):
+    path = row.mask_path.replace(
+        "CH_MASK_FINAL.png",
+        model_obj.architecture_id + model_obj.date_range_id + "PX" + "_UNET_PMAP.npy",
+    )
     if pmap is None:
-        pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+        pmap = fits_to_pmap(model_obj, prepare_fits(row.fits_path))
     np.save(path, pmap)
     return path
