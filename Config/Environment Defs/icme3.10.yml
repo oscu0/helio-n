@@ -1,25 +1,21 @@
-name: icme3.10-metal
+name: icme3.10-cpu
 channels:
-  - apple
   - conda-forge
   - defaults
 dependencies:
   - python=3.10
   - pip
-  - tensorflow-deps
   - hdf5        # optional but helps h5py performance
   - libopenblas # optional; remove if you prefer MKL/Accelerate
   - cx_oracle=8.3.0=py310h7bdd564_5
   - psycopg=3.3.2=pyh848bd53_0
   - psycopg-c=3.3.2=py310h9c59733_0
   - pip:
-      # Deep learning (CUDA)
-      - tensorflow-macos==2.16.2
-      - tensorflow-metal==1.2.0
+      # Deep learning (CPU)
+      - tensorflow==2.16.2
       - keras==3.12.0
       - jax==0.4.34
       - jaxlib==0.4.34
-      - jax-metal==0.1.1
 
       # Core numerics / imaging
       - numpy==1.26.4
@@ -42,6 +38,10 @@ dependencies:
       - drms==0.9.0
       - reproject==0.14.1
       - aiapy==0.10.2
+      - spacepy==0.7.0
+      - cdasws==1.8.12
+      - cdflib==1.3.7
+      - pyspedas==2.0.5
 
       # Notebooks / viz
       - jupyterlab==4.5.0
@@ -52,12 +52,8 @@ dependencies:
       # IO / misc
       - beautifulsoup4==4.14.3
       - botocore==1.40.61
-      - cdasws==1.8.12
-      - cdflib==1.3.7
       - imageio==2.37.2
       - lxml==6.0.2
-      - pyspedas==2.0.5
-      - spacepy==0.7.0
       - pyarrow==22.0.0
       - rich==14.2.0
       - requests>=2.32
