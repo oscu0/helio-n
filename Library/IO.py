@@ -93,10 +93,12 @@ def prepare_dataset(
     architecture="A1",
     date_range="D1",
     hmi_root=None,
+    max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
 ):
     """
     Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
+    Inexact matches are allowed within max_time_delta when aligning to FITS keys.
 
     Returns
     -------
@@ -185,10 +187,57 @@ def prepare_dataset(
     df_pmaps = df_pmaps.drop_duplicates("key", keep="first")
     df_hmi = df_hmi.drop_duplicates("key", keep="first")
 
+    def to_dt(series):
+        cleaned = series.astype(str).str.replace(r"\D", "", regex=True)
+        with_seconds = cleaned.where(cleaned.str.len() == 14)
+        with_minutes = cleaned.where(cleaned.str.len() == 12)
+        dt = pd.to_datetime(with_seconds, format="%Y%m%d%H%M%S", errors="coerce")
+        dt_minutes = pd.to_datetime(with_minutes, format="%Y%m%d%H%M", errors="coerce")
+        return dt.fillna(dt_minutes)
+
     # Full outer join of three tables
     merged = df_fits.merge(df_masks, on="key", how="outer")
     merged = merged.merge(df_pmaps, on="key", how="outer")
     merged = merged.merge(df_hmi, on="key", how="outer")
+
+    if max_time_delta is not None:
+        tolerance = pd.Timedelta(max_time_delta)
+        fits_align = df_fits[["key"]].copy()
+        fits_align["dt"] = to_dt(fits_align["key"])
+        fits_align = fits_align.dropna(subset=["dt"]).sort_values("dt")
+
+        if not fits_align.empty:
+
+            def fill_from_nearest(df_other, path_col):
+                nonlocal merged
+                if df_other.empty:
+                    return
+                other_align = df_other[["key", path_col]].copy()
+                other_align["dt"] = to_dt(other_align["key"])
+                other_align = other_align.rename(columns={"key": "other_key"})
+                other_align = other_align.dropna(subset=["dt"]).sort_values("dt")
+                if other_align.empty:
+                    return
+                aligned = pd.merge_asof(
+                    fits_align,
+                    other_align,
+                    on="dt",
+                    direction="nearest",
+                    tolerance=tolerance,
+                )
+                aligned = aligned.dropna(subset=[path_col])
+                if aligned.empty:
+                    return
+                aligned = aligned[["key", path_col]].rename(
+                    columns={path_col: f"{path_col}_fuzzy"}
+                )
+                merged = merged.merge(aligned, on="key", how="left")
+                merged[path_col] = merged[path_col].fillna(merged[f"{path_col}_fuzzy"])
+                merged.drop(columns=[f"{path_col}_fuzzy"], inplace=True)
+
+            fill_from_nearest(df_masks, "mask_path")
+            fill_from_nearest(df_pmaps, "pmap_path")
+            fill_from_nearest(df_hmi, "hmi_path")
 
     # Flags
     has_fits = merged["fits_path"].notna()
