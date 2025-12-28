@@ -54,7 +54,11 @@ def plot_ch_map(
         oval = generate_omask(row)
 
     if source.lower() == "unet":
-        smoothing_params = get_postprocessing_params(postprocessing)
+        smoothing_params = (
+            postprocessing
+            if isinstance(postprocessing, dict)
+            else get_postprocessing_params(postprocessing)
+        )
         if pmap is None:
             if getattr(row, "pmap_path", None):
                 pmap = prepare_pmap(row.pmap_path)
@@ -188,7 +192,11 @@ def plot_ch_mask_only(
 
     # --- obtain mask ---
     if source.lower() == "unet":
-        smoothing_params = get_postprocessing_params(postprocessing)
+        smoothing_params = (
+            postprocessing
+            if isinstance(postprocessing, dict)
+            else get_postprocessing_params(postprocessing)
+        )
 
         if pmap is None:
             if getattr(row, "pmap_path", None):
