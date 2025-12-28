@@ -36,7 +36,11 @@ def fits_to_pmap(model, img2d):
 
     x = img[np.newaxis, ..., np.newaxis]  # (1, H, W, 1)
 
-    prob = model.model.predict(x, verbose=0)[0, ..., 0]
+    # Prefer the compiled inference path on the wrapped model, fall back to predict
+    if hasattr(model, "predict"):
+        prob = model.predict(x)[0, ..., 0]
+    else:
+        prob = model.model.predict(x, verbose=0)[0, ..., 0]
 
     return prob
 

@@ -311,6 +311,9 @@ class HelioNModel:
         self.architecture = self._read_json(self.architecture_path)
         self.date_range = self._read_json(self.date_range_path)
 
+        # Compile a no-tracing inference fn for reuse
+        self._infer = tf.function(lambda x: self.model(x, training=False))
+
     @staticmethod
     def _read_json(path: Path) -> dict:
         with path.open("r", encoding="utf-8") as f:
@@ -322,4 +325,8 @@ class HelioNModel:
     def __repr__(self):
         return self.__str__()
 
+    def predict(self, x):
+        """Fast inference using precompiled tf.function; returns numpy array."""
+        out = self._infer(tf.convert_to_tensor(x), jit_compile=True)
+        return out.numpy()
 
