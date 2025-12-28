@@ -99,9 +99,13 @@ def main():
     batch_size = model.architecture["apply_batch_size"]
     plot_workers = model.architecture.get("plot_threads", os.cpu_count() or 4)
     max_inflight_batches = model.architecture.get("max_inflight_batches", 2)
+    group_batches = max(
+        1, int(model.architecture.get("plot_group_batches", 1))
+    )  # how many batches to combine per process task
     rows = list(df.itertuples())
     pmap_paths = []
     inflight: deque[Future] = deque()
+    pending_batches = []
 
     ctx = mp.get_context("spawn")
     with ProcessPoolExecutor(max_workers=plot_workers, mp_context=ctx) as executor:
@@ -154,10 +158,45 @@ def main():
                     pbar.update(len(batch_rows))
                     continue
 
+                pending_batches.append(task_rows)
+
+                while len(pending_batches) >= group_batches:
+                    combined = []
+                    for _ in range(group_batches):
+                        if pending_batches:
+                            combined.extend(pending_batches.pop(0))
+                    fut = executor.submit(
+                        render_batch,
+                        {
+                            "rows": combined,
+                            "postprocessing": postprocessing,
+                            "arch_id": model.architecture_id,
+                            "date_id": model.date_range_id,
+                            "fast_mask": True,
+                        },
+                    )
+                    inflight.append(fut)
+
+                    while len(inflight) >= max_inflight_batches:
+                        oldest = inflight.popleft()
+                        try:
+                            res = oldest.result()
+                            pmap_paths.extend(res)
+                        except Exception as e:
+                            print(f"Error in plotting batch: {e}")
+
+                pbar.update(len(batch_rows))
+
+            # flush any remaining pending batches
+            while pending_batches:
+                combined = []
+                for _ in range(group_batches):
+                    if pending_batches:
+                        combined.extend(pending_batches.pop(0))
                 fut = executor.submit(
                     render_batch,
                     {
-                        "rows": task_rows,
+                        "rows": combined,
                         "postprocessing": postprocessing,
                         "arch_id": model.architecture_id,
                         "date_id": model.date_range_id,
@@ -165,16 +204,6 @@ def main():
                     },
                 )
                 inflight.append(fut)
-
-                while len(inflight) >= max_inflight_batches:
-                    oldest = inflight.popleft()
-                    try:
-                        res = oldest.result()
-                        pmap_paths.extend(res)
-                    except Exception as e:
-                        print(f"Error in plotting batch: {e}")
-
-                pbar.update(len(batch_rows))
 
             while inflight:
                 fut = inflight.popleft()
