@@ -1,0 +1,59 @@
+name: icme3.12-metal
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - hdf5
+  - pip:
+      # Deep learning
+      - tensorflow==2.19.1
+      # - keras==3.12.0
+      # - jax==0.4.34
+      # - jaxlib==0.4.34
+      # - jax-metal==0.1.1
+
+      # Core numerics / imaging
+      - numpy
+      - pandas
+      - scipy
+      - scikit-image
+      - pillow
+      - matplotlib
+      - matplotlib-venn
+      - seaborn
+      - mahotas
+      - h5py
+      - tqdm
+      - sympy
+      - xarray
+
+      # Solar / space physics
+      - sunpy
+      - astropy
+      - drms
+      - reproject
+      - aiapy
+
+      # Notebooks / viz
+      - jupyterlab
+      - ipykernel
+      - ipywidgets
+      - plotly
+
+      # IO / misc
+      - beautifulsoup4
+      - botocore
+      - protobuf==4.25.8
+      - cdasws
+      - cdflib
+      - imageio
+      - lxml
+      - pyspedas
+      - spacepy
+      - pyarrow
+      - rich
+      - requests
+      - psycopg
+      - cx_Oracle

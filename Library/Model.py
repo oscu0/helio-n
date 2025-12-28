@@ -1,23 +1,19 @@
 import json
+import os
+from pathlib import Path
 
 import numpy as np
-import os
-
 import PIL
+import tensorflow as tf
 
-from pathlib import Path
+from Library import IO
+from Library.Config import paths
 
 MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
 
-os.environ["KERAS_BACKEND"] = "jax"
-import keras
-
-# keras.config.set_backend("jax")
-from keras import layers, ops
-
-from Library import IO
-from Library.Config import paths
+# Shortcuts to tf.keras namespaces
+layers = tf.keras.layers
 
 
 def augment_pair(img, mask):
@@ -155,20 +151,20 @@ def build_unet(
 
 def dice_coef(y_true, y_pred, smooth=1.0):
     # flatten per-sample
-    y_true_f = ops.reshape(y_true, (ops.shape(y_true)[0], -1))
-    y_pred_f = ops.reshape(y_pred, (ops.shape(y_pred)[0], -1))
+    y_true_f = tf.reshape(y_true, (tf.shape(y_true)[0], -1))
+    y_pred_f = tf.reshape(y_pred, (tf.shape(y_pred)[0], -1))
 
-    intersection = ops.sum(y_true_f * y_pred_f, axis=1)
-    denom = ops.sum(y_true_f, axis=1) + ops.sum(y_pred_f, axis=1)
+    intersection = tf.reduce_sum(y_true_f * y_pred_f, axis=1)
+    denom = tf.reduce_sum(y_true_f, axis=1) + tf.reduce_sum(y_pred_f, axis=1)
 
     dice = (2.0 * intersection + smooth) / (denom + smooth)
-    return ops.mean(dice)
+    return tf.reduce_mean(dice)
 
 
 def bce_dice_loss(y_true, y_pred):
-    bce = keras.losses.binary_crossentropy(y_true, y_pred)
+    bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
     dice_loss = 1.0 - dice_coef(y_true, y_pred)
-    return 0.4 * ops.mean(bce) + 0.6 * dice_loss
+    return 0.4 * tf.reduce_mean(bce) + 0.6 * dice_loss
 
 
 def train_model(pairs_df, model_params, keep_every=3, path=None):
@@ -218,28 +214,28 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
 
     model = build_unet(
         model_params=model_params
-    )  # must be built with keras.layers, not tf.keras
+    )
 
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=model_params["learning_rate"]),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=model_params["learning_rate"]),
         loss=bce_dice_loss,  # your keras.ops-based loss
         metrics=[dice_coef, "accuracy"],
     )
 
-    early_stop = keras.callbacks.EarlyStopping(
+    early_stop = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss",
         patience=5,
         restore_best_weights=True,
     )
 
     callbacks = [
-        keras.callbacks.ModelCheckpoint(
+        tf.keras.callbacks.ModelCheckpoint(
             paths["model_path"],
             monitor="val_loss",
             save_best_only=True,
             save_weights_only=False,
         ),
-        keras.callbacks.ReduceLROnPlateau(
+        tf.keras.callbacks.ReduceLROnPlateau(
             monitor="val_loss",
             factor=0.5,
             patience=3,
@@ -265,14 +261,14 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
 
 
 def load_trained_model(architecture, date_range):
-    architecture_json = json.load(
-        open(PROJECT_ROOT + "Config/Model/Architecture/" + architecture + ".json")
-    )
-    date_range_json = json.load(
-        open(PROJECT_ROOT + "Config/Model/Date Range/" + date_range + ".json")
-    )
+    # architecture_json = json.load(
+    #     open(PROJECT_ROOT + "Config/Model/Architecture/" + architecture + ".json")
+    # )
+    # date_range_json = json.load(
+    #     open(PROJECT_ROOT + "Config/Model/Date Range/" + date_range + ".json")
+    # )
     path = PROJECT_ROOT + "Outputs/Models/" + architecture + date_range + ".keras"
-    print(path, architecture_json, date_range_json)
+    print(path)
 
     custom_objects = {
         "bce_dice_loss": bce_dice_loss,
@@ -280,7 +276,7 @@ def load_trained_model(architecture, date_range):
     }
     
     model = HelioNModel(
-        keras.models.load_model(path, custom_objects=custom_objects),
+        tf.keras.models.load_model(path, custom_objects=custom_objects),
         architecture,
         date_range
     )
