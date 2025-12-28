@@ -46,6 +46,3 @@ else:
         except Exception as e:
             print(f"Error processing {row.name}: {e}")
             path = None
-        pmap_paths.append(path)
-
-    df["pmap_path"] = pmap_paths

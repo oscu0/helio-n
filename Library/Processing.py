@@ -18,7 +18,7 @@ MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
 
 from Library.Config import *
-from Library.IO import prepare_fits
+from Library.IO import prepare_fits, pmap_path, prepare_pmap
 
 
 def fits_to_pmap(model, img2d):
@@ -82,11 +82,16 @@ def pmap_to_mask(
 
 
 def save_pmap(model, row, pmap=None):
-    path = row.mask_path.replace("_FINAL", "").replace(
-        "CH_MASK.png",
-        model.architecture_id + model.date_range_id + "PX" + ".npy",
-    )
+    path = pmap_path(row, model.architecture_id, model.date_range_id)
     if pmap is None:
         pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
     np.save(path, pmap)
     return path, pmap
+
+
+def find_or_make_pmap(row, model):
+    try:
+        pmap = prepare_pmap(pmap_path(row, model.architecture_id, model.date_range_id))
+    except FileNotFoundError:
+        pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+    return pmap

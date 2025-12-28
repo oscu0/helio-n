@@ -93,23 +93,6 @@ def prepare_dataset(
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
 ):
-    """
-    Scan FITS / mask / (optional) pmap roots and return matched & unmatched DataFrames.
-    Inexact matches are allowed within max_time_delta when aligning to FITS keys.
-
-    Returns
-    -------
-    matches : DataFrame
-        Rows where FITS + mask + pmap (pmap_path may be empty if pmaps_root is None or missing).
-        Index is the key (timestamp string).
-        Columns: fits_path, mask_path, pmap_path
-    fits_only : DataFrame
-        Rows with FITS present but neither mask nor pmap.
-    masks_only : DataFrame
-        Rows with mask present but neither fits nor pmap.
-    partials : DataFrame
-        Rows where exactly two of the three are present (fits+mask, fits+pmap, mask+pmap).
-    """
 
     def index(p):
         return os.path.basename(p)[3:16]
@@ -120,7 +103,7 @@ def prepare_dataset(
     # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
     mask_files = glob.glob(
-        os.path.join(masks_root, "**", "*_CH_MASK_FINAL.png"), recursive=True
+        os.path.join(masks_root, "**", "*_CH_MASK*.png"), recursive=True
     )
 
     df_fits = pd.DataFrame(
@@ -261,3 +244,11 @@ def prepare_dataset(
         "masks_only": masks_only,
         "no_hmi": no_hmi,
     }
+
+
+def pmap_path(row, architecture_id, date_range_id):
+    return row.mask_path.replace("_FINAL", "").replace(
+        "CH_MASK.png",
+        "CH_MASK_" + architecture_id + date_range_id + "PX" + ".npy",
+    )
+

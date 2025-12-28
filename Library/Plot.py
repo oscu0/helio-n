@@ -11,11 +11,8 @@ from PIL import Image
 
 
 from .Processing import *
-from .IO import prepare_fits, prepare_pmap, prepare_mask
+from .IO import prepare_fits, prepare_pmap, prepare_mask, pmap_path
 from .Metrics import generate_omask
-
-
-
 
 
 cmap = ct.aia_color_table(u.Quantity(193, "Angstrom"))
@@ -60,12 +57,7 @@ def plot_ch_map(
             else get_postprocessing_params(postprocessing)
         )
         if pmap is None:
-            if getattr(row, "pmap_path", None):
-                pmap = prepare_pmap(row.pmap_path)
-            else:
-                if model is None:
-                    raise ValueError("plot_ch_map(source='unet') requires model if pmap is not provided.")
-                pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+            pmap = find_or_make_pmap(row, model)
         mask = pmap_to_mask(pmap, smoothing_params)
         title = "helio-n (U-Net)"
 
@@ -150,6 +142,7 @@ def plot_ch_map(
 
     return fig, ax
 
+
 def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None):
     fig, ax = plot_ch_map(
         row,
@@ -173,10 +166,10 @@ def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None):
 
 def plot_ch_mask_only(
     row,
-    source="unet",          # "unet" or "idl"
-    model=None,             # required if source="unet" and no pmap_path/pmap provided
-    pmap=None,              # optional precomputed pmap for source="unet"
-    postprocessing="P0",    # used only for source="unet"
+    source="unet",  # "unet" or "idl"
+    model=None,  # required if source="unet" and no pmap_path/pmap provided
+    pmap=None,  # optional precomputed pmap for source="unet"
+    postprocessing="P0",  # used only for source="unet"
     ax=None,
 ):
     """
@@ -199,12 +192,7 @@ def plot_ch_mask_only(
         )
 
         if pmap is None:
-            if getattr(row, "pmap_path", None):
-                pmap = prepare_pmap(row.pmap_path)
-            else:
-                if model is None:
-                    raise ValueError("plot_ch_mask_only(source='unet') requires model if pmap is not provided.")
-                pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+            pmap = find_or_make_pmap(row, model)
 
         mask = pmap_to_mask(pmap, smoothing_params)
 
@@ -247,13 +235,10 @@ def plot_ch_mask_only(
 
     return fig, ax
 
+
 def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None):
     fig, ax = plot_ch_mask_only(
-        row,
-        source="unet",
-        pmap=pmap,
-        model=model,
-        postprocessing=postprocessing
+        row, source="unet", pmap=pmap, model=model, postprocessing=postprocessing
     )
 
     out_path = row.mask_path.replace("_FINAL", "").replace(

@@ -217,9 +217,7 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
         model_params=model_params,
     )
 
-    model = build_unet(
-        model_params=model_params
-    )
+    model = build_unet(model_params=model_params)
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=model_params["learning_rate"]),
@@ -279,11 +277,11 @@ def load_trained_model(architecture, date_range):
         "bce_dice_loss": bce_dice_loss,
         "dice_coef": dice_coef,
     }
-    
+
     model = HelioNModel(
         tf.keras.models.load_model(path, custom_objects=custom_objects),
         architecture,
-        date_range
+        date_range,
     )
 
     return model
@@ -320,6 +318,8 @@ class HelioNModel:
 
     def __str__(self):
         return "Wrapped model " + self.architecture_id + self.date_range_id
-    
+
     def __repr__(self):
         return self.__str__()
+
+

@@ -8,7 +8,7 @@ from sunpy.coordinates import frames
 from Config import *
 from Library import Processing
 from Library.Config import *
-from Library.IO import prepare_fits, prepare_mask, prepare_pmap
+from Library.IO import prepare_fits, prepare_mask
 
 
 def _ensure_binary_mask(mask):
@@ -351,10 +351,7 @@ def stats(
 
     m1 = prepare_mask(row.mask_path)
     if m2 is None:
-        if row.pmap_path is not None:
-            pmap = prepare_pmap(row.pmap_path)
-        else:
-            pmap = Processing.fits_to_pmap(model, prepare_fits(row.fits_path))
+        pmap = Processing.find_or_make_pmap(row, model)
 
         m2 = Processing.pmap_to_mask(
             pmap,

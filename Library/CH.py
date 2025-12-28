@@ -3,7 +3,7 @@ import sunpy.map
 import numpy as np
 from Library import Processing
 from Library.Config import *
-from Library.IO import prepare_fits, prepare_mask, prepare_pmap
+from Library.IO import prepare_fits, prepare_mask
 from Library.Metrics import generate_omask
 from sunpy.coordinates import frames
 from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_disk
@@ -40,14 +40,17 @@ def project(map, mask):
     return proj_mask
 
 
-def ch_abs_area(row, reference_mode=False, oval=True):
+def ch_abs_area(row, pmap=None, reference_mode=False, oval=True):
     m = sunpy.map.Map(row.fits_path)
+
+    if pmap is None and not reference_mode:
+        pmap = Processing.find_or_make_pmap(row, None)
 
     if reference_mode:
         ch_mask_map = prepare_mask(row.mask_path)
     else:
         ch_mask_map = Processing.pmap_to_mask(
-            prepare_pmap(row.pmap_path), smoothing_params=Processing.get_postprocessing_params("P0")
+            pmap, smoothing_params=Processing.get_postprocessing_params("P0")
         )
 
     if oval:
@@ -71,8 +74,8 @@ def sun_area(row):
     return project(map, mask).sum()
 
 
-def ch_rel_area(row, reference_mode=False):
-    ch_area = ch_abs_area(row, reference_mode, oval=True)
+def ch_rel_area(row, pmap=None, reference_mode=False):
+    ch_area = ch_abs_area(row, pmap, reference_mode, oval=True)
 
     # print("OMASK AREA:", omask_area(row, generate_omask(row)))
     # print("CH AREA:", ch_area)
