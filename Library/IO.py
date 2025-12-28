@@ -89,9 +89,6 @@ def prepare_pmap(path):
 def prepare_dataset(
     fits_root,
     masks_root,
-    pmaps_root=-1,
-    architecture="A1",
-    date_range="D1",
     hmi_root=None,
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
@@ -110,14 +107,9 @@ def prepare_dataset(
         Rows with FITS present but neither mask nor pmap.
     masks_only : DataFrame
         Rows with mask present but neither fits nor pmap.
-    pmaps_only : DataFrame
-        Rows with pmap present but neither fits nor mask (empty if pmaps_root is None).
     partials : DataFrame
         Rows where exactly two of the three are present (fits+mask, fits+pmap, mask+pmap).
     """
-
-    if pmaps_root == -1:
-        pmaps_root = masks_root
 
     def index(p):
         return os.path.basename(p)[3:16]
@@ -138,21 +130,6 @@ def prepare_dataset(
         {"key": [index(p) for p in mask_files], "mask_path": mask_files}
     )
 
-    # Optional
-    if pmaps_root is not None:
-        pmap_files = glob.glob(
-            os.path.join(
-                pmaps_root, "**", "*_CH_" + architecture + date_range + "PX" + ".npy"
-            ),
-            recursive=True,
-        )
-    else:
-        pmap_files = []
-
-    df_pmaps = pd.DataFrame(
-        {"key": [index(p) for p in pmap_files], "pmap_path": pmap_files}
-    )
-
     if hmi_root is not None:
         hmi_files = glob.glob(os.path.join(hmi_root, "**", "hmi*.fits"), recursive=True)
     else:
@@ -165,7 +142,6 @@ def prepare_dataset(
     # Report duplicates
     dup_fits = df_fits[df_fits.duplicated("key", keep=False)]
     dup_masks = df_masks[df_masks.duplicated("key", keep=False)]
-    dup_pmaps = df_pmaps[df_pmaps.duplicated("key", keep=False)]
     dup_hmi = df_hmi[df_hmi.duplicated("key", keep=False)]
 
     if not dup_fits.empty:
@@ -174,9 +150,6 @@ def prepare_dataset(
     if not dup_masks.empty:
         print("⚠ Duplicate keys in masks:")
         print(dup_masks.sort_values("key"))
-    if not dup_pmaps.empty:
-        print("⚠ Duplicate keys in PMAPs:")
-        print(dup_pmaps.sort_values("key"))
     if not dup_hmi.empty:
         print("⚠ Duplicate keys in HMI:")
         print(dup_hmi.sort_values("key"))
@@ -184,7 +157,6 @@ def prepare_dataset(
     # Keep first occurrence for simplicity
     df_fits = df_fits.drop_duplicates("key", keep="first")
     df_masks = df_masks.drop_duplicates("key", keep="first")
-    df_pmaps = df_pmaps.drop_duplicates("key", keep="first")
     df_hmi = df_hmi.drop_duplicates("key", keep="first")
 
     def to_dt(series):
@@ -197,7 +169,6 @@ def prepare_dataset(
 
     # Full outer join of three tables
     merged = df_fits.merge(df_masks, on="key", how="outer")
-    merged = merged.merge(df_pmaps, on="key", how="outer")
     merged = merged.merge(df_hmi, on="key", how="outer")
 
     if max_time_delta is not None:
@@ -236,28 +207,25 @@ def prepare_dataset(
                 merged.drop(columns=[f"{path_col}_fuzzy"], inplace=True)
 
             fill_from_nearest(df_masks, "mask_path")
-            fill_from_nearest(df_pmaps, "pmap_path")
             fill_from_nearest(df_hmi, "hmi_path")
 
     # Flags
     has_fits = merged["fits_path"].notna()
     has_mask = merged["mask_path"].notna()
-    has_pmap = merged["pmap_path"].notna()
     has_hmi = merged["hmi_path"].notna()
 
     # Categories
-    fits_only = merged[has_fits & ~has_mask & ~has_pmap].copy()
-    masks_only = merged[~has_fits & has_mask & ~has_pmap].copy()
-    pmaps_only = merged[~has_fits & ~has_mask & has_pmap].copy()
-    hmi_only = merged[~has_fits & ~has_mask & has_hmi].copy()
+    fits_only = merged[has_fits & ~has_mask].copy()
+    masks_only = merged[~has_fits & has_mask].copy()
+    no_hmi = merged[has_fits & has_mask & ~has_hmi].copy()
 
     # Prepare "matches" DataFrame similar to previous API: use all_three primarily,
     # but include rows where pmap may be empty if pmaps_root not provided.
     # We'll create a canonical matches DF that contains any row that has at least fits and mask,
     # and include pmap_path if present (empty string otherwise).
     matches = merged[has_fits & has_mask].copy()
+
     # Evil pandas moment
-    matches["pmap_path"] = matches["pmap_path"].fillna(np.nan).replace([np.nan], [None])
     matches["hmi_path"] = matches["hmi_path"].fillna(np.nan).replace([np.nan], [None])
 
     # Convert index to the key (timestamp string) for matches
@@ -268,8 +236,7 @@ def prepare_dataset(
     for df, path, name in [
         (fits_only, paths["artifact_root"] + "FITS Only.csv", "fits_only"),
         (masks_only, paths["artifact_root"] + "Masks Only.csv", "masks_only"),
-        (pmaps_only, paths["artifact_root"] + "PMAPs Only.csv", "pmaps_only"),
-        (hmi_only, paths["artifact_root"] + "HMI Only.csv", "hmi_only"),
+        (no_hmi, paths["artifact_root"] + "No HMI.csv", "hmi_only"),
     ]:
         # ensure we don't fail when a category is empty
         try:
@@ -292,6 +259,5 @@ def prepare_dataset(
     return matches, {
         "fits_only": fits_only,
         "masks_only": masks_only,
-        "pmaps_only": pmaps_only,
-        "hmi_only": hmi_only,
+        "no_hmi": no_hmi,
     }
