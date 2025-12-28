@@ -59,10 +59,10 @@ def pmap_to_mask(
     """
 
     # --- threshold to get binary CH mask ---
-    mask = (pmap > smoothing_params["threshold"]).astype(np.float32)
+    mask = (pmap > smoothing_params["threshold"])
 
     # --- morphological smoothing ---
-    # if smoothing_params["closing_radius"] > 0:
+    # closing supports bool; avoid float to keep skimage happy
     mask = closing(mask, disk(smoothing_params["closing_radius"]))
 
     if smoothing_params["min_size"] > 0:
@@ -71,7 +71,7 @@ def pmap_to_mask(
     if smoothing_params["hole_size"] > 0:
         mask = remove_small_holes(mask, max_size=smoothing_params["hole_size"])
 
-    mask_u8 = (mask > 0.5).astype(np.uint8) * 255
+    mask_u8 = mask.astype(np.uint8) * 255
     img = PIL.Image.fromarray(mask_u8, mode="L")
     if img.size != (1024, 1024):
         img = img.resize((1024, 1024), resample=PIL.Image.NEAREST)
