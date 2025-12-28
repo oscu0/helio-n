@@ -21,7 +21,8 @@ from Library.Config import *
 from Library.IO import prepare_fits
 
 
-def fits_to_pmap(model, img2d, img_size=1024):
+def fits_to_pmap(model, img2d):
+    img_size = model.architecture["img_size"]
     img = np.asarray(img2d, dtype=np.float32)
 
     if img.ndim != 2:

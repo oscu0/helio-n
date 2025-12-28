@@ -39,9 +39,6 @@ else:
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Generating pmaps"):
         try:
             path, pmap = save_pmap(model, row)  # your existing function
-            mask = pmap_to_mask(
-                pmap, smoothing_params=get_postprocessing_params(postprocessing)
-            )
             save_ch_map_unet(row, model, pmap=pmap, postprocessing=postprocessing)
             save_ch_map_unet(row, model, pmap=pmap, postprocessing="P0")
             save_ch_mask_only_unet(row, model, pmap=pmap, postprocessing=postprocessing)
