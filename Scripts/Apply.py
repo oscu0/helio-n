@@ -21,6 +21,7 @@ from Library.Processing import *
 from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.Config import *
 from Library.Config import paths
+import sunpy.map
 from concurrent.futures import ThreadPoolExecutor, wait, Future
 from collections import deque
 
@@ -38,54 +39,71 @@ if len(df) == 0:
     sys.exit(1)
 else:
     batch_size = model.architecture["apply_batch_size"]
-    env_workers = os.environ.get("APPLY_PLOT_THREADS")
+    batch_size = model.architecture["plot_threads"]
     cpu_workers = os.cpu_count() or 4
     plot_workers = max(1, min(batch_size * 3, cpu_workers))
 
     # Limit how many batches we keep in-flight for plotting to avoid memory bloat
-    max_inflight_batches = max(1, int(os.environ.get("APPLY_MAX_INFLIGHT", "2")))
+    max_inflight_batches = 8
     rows = list(df.itertuples())
     pmap_paths = []
 
     def plot_batch(batch_rows, probs):
         results = [None] * len(batch_rows)
+
+        def worker(row, pmap, base_map):
+            try:
+                path = pmap_path(row, model.architecture_id, model.date_range_id)
+                np.save(path, pmap)
+                save_ch_map_unet(
+                    row,
+                    model,
+                    postprocessing,
+                    pmap,
+                    None,
+                    base_map,
+                )
+                save_ch_map_unet(
+                    row,
+                    model,
+                    "P0",
+                    pmap,
+                    None,
+                    base_map,
+                )
+                save_ch_mask_only_unet(
+                    row,
+                    model,
+                    postprocessing,
+                    pmap,
+                    True,
+                )
+                return path
+            except Exception as e:
+                print(f"Error processing {row.Index}: {e}")
+                return None
+
+        futures = []
         for (i, row), prob in zip(enumerate(batch_rows), probs):
             try:
                 pmap = prob[..., 0]
-                path = pmap_path(row, model.architecture_id, model.date_range_id)
-                np.save(path, pmap)
-                futures = [
-                    executor.submit(
-                        save_ch_map_unet,
-                        row,
-                        model,
-                        pmap,
-                        postprocessing,
-                    ),
-                    executor.submit(
-                        save_ch_map_unet,
-                        row,
-                        model,
-                        pmap,
-                        "P0",
-                    ),
-                    executor.submit(
-                        save_ch_mask_only_unet,
-                        row,
-                        model,
-                        pmap,
-                        postprocessing,
-                    ),
-                ]
-                done, _ = wait(futures)
-                for f in done:
-                    try:
-                        f.result()
-                    except Exception as e:
-                        print(f"Error during plotting {row.Index}: {e}")
-                results[i] = path
+                try:
+                    base_map = sunpy.map.Map(row.fits_path)
+                except Exception as e:
+                    print(f"Error loading base map {row.Index}: {e}")
+                    base_map = None
+                futures.append(executor.submit(worker, row, pmap, base_map))
             except Exception as e:
-                print(f"Error processing {row.Index}: {e}")
+                print(f"Error preparing plotting for {row.Index}: {e}")
+                futures.append(None)
+
+        for i, fut in enumerate(futures):
+            if fut is None:
+                continue
+            try:
+                results[i] = fut.result()
+            except Exception as e:
+                print(f"Error during plotting {batch_rows[i].Index}: {e}")
         return results
 
     inflight: deque[Future] = deque()

@@ -28,6 +28,7 @@ def plot_ch_map(
     show_fits=True,
     ax=None,
     set_title=False,
+    base_map=None,
 ):
     FIGSIZE_IN = (TARGET_PX / DPI, TARGET_PX / DPI)
 
@@ -45,7 +46,7 @@ def plot_ch_map(
             c.set_axislabel("")
         return hgs
 
-    m = sunpy.map.Map(row.fits_path)
+    m = base_map if base_map is not None else sunpy.map.Map(row.fits_path)
 
     if oval is None:
         oval = generate_omask(row)
@@ -143,7 +144,7 @@ def plot_ch_map(
     return fig, ax
 
 
-def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None):
+def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None, base_map=None):
     fig, ax = plot_ch_map(
         row,
         source="unet",
@@ -152,6 +153,7 @@ def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None):
         postprocessing=postprocessing,
         oval=oval,
         set_title=False,
+        base_map=base_map,
     )
 
     out_path = row.mask_path.replace("_FINAL", "").replace(
@@ -236,14 +238,31 @@ def plot_ch_mask_only(
     return fig, ax
 
 
-def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None):
-    fig, ax = plot_ch_mask_only(
-        row, source="unet", pmap=pmap, model=model, postprocessing=postprocessing
-    )
-
+def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None, fast=False):
     out_path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK",
         "CH_MASK_" + model.architecture_id + model.date_range_id + postprocessing,
+    )
+
+    if fast:
+        smoothing_params = (
+            postprocessing
+            if isinstance(postprocessing, dict)
+            else get_postprocessing_params(postprocessing)
+        )
+        if pmap is None:
+            pmap = find_or_make_pmap(row, model)
+        mask = pmap_to_mask(pmap, smoothing_params)
+        mask = np.flipud(mask)
+        mask_u8 = (mask > 0.5).astype(np.uint8) * 255
+        img = PIL.Image.fromarray(mask_u8, mode="L")
+        if img.size != (TARGET_PX, TARGET_PX):
+            img = img.resize((TARGET_PX, TARGET_PX), resample=PIL.Image.NEAREST)
+        img.save(out_path)
+        return
+
+    fig, ax = plot_ch_mask_only(
+        row, source="unet", pmap=pmap, model=model, postprocessing=postprocessing
     )
 
     # Save the correct figure at exact size; no resizing step needed
