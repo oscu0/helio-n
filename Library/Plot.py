@@ -144,7 +144,17 @@ def plot_ch_map(
     return fig, ax
 
 
-def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None, base_map=None):
+def save_ch_map_unet(
+    row,
+    model,
+    postprocessing="P0",
+    pmap=None,
+    oval=None,
+    base_map=None,
+    arch_id=None,
+    date_id=None,
+    precomputed_oval=None,
+):
     fig, ax = plot_ch_map(
         row,
         source="unet",
@@ -154,11 +164,15 @@ def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None, base
         oval=oval,
         set_title=False,
         base_map=base_map,
+        precomputed_oval=precomputed_oval,
     )
+
+    architecture_id = arch_id if arch_id is not None else model.architecture_id
+    date_range_id = date_id if date_id is not None else model.date_range_id
 
     out_path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK",
-        "CH_" + model.architecture_id + model.date_range_id + postprocessing,
+        "CH_" + architecture_id + date_range_id + postprocessing,
     )
 
     # Save the correct figure at exact size; no resizing step needed
@@ -238,10 +252,21 @@ def plot_ch_mask_only(
     return fig, ax
 
 
-def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None, fast=False):
+def save_ch_mask_only_unet(
+    row,
+    model,
+    postprocessing="P0",
+    pmap=None,
+    fast=False,
+    arch_id=None,
+    date_id=None,
+):
     out_path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK",
-        "CH_MASK_" + model.architecture_id + model.date_range_id + postprocessing,
+        "CH_MASK_"
+        + (arch_id if arch_id is not None else model.architecture_id)
+        + (date_id if date_id is not None else model.date_range_id)
+        + postprocessing,
     )
 
     if fast:
