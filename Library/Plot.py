@@ -157,7 +157,7 @@ def save_ch_map_unet(row, model, postprocessing="P0", pmap=None, oval=None):
         set_title=False,
     )
 
-    out_path = row.mask_path.replace(
+    out_path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK",
         "CH_" + model.architecture_id + model.date_range_id + postprocessing,
     )
@@ -248,7 +248,7 @@ def save_ch_mask_only_unet(row, model, postprocessing="P0", pmap=None):
         postprocessing=postprocessing
     )
 
-    out_path = row.mask_path.replace(
+    out_path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK",
         "CH_MASK_" + model.architecture_id + model.date_range_id + postprocessing,
     )

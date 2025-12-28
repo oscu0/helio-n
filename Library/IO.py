@@ -128,7 +128,7 @@ def prepare_dataset(
     # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
     mask_files = glob.glob(
-        os.path.join(masks_root, "**", "*_CH_MASK.png"), recursive=True
+        os.path.join(masks_root, "**", "*_CH_MASK_FINAL.png"), recursive=True
     )
 
     df_fits = pd.DataFrame(

@@ -82,7 +82,7 @@ def pmap_to_mask(
 
 
 def save_pmap(model, row, pmap=None):
-    path = row.mask_path.replace(
+    path = row.mask_path.replace("_FINAL", "").replace(
         "CH_MASK.png",
         model.architecture_id + model.date_range_id + "PX" + ".npy",
     )
