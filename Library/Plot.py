@@ -153,7 +153,6 @@ def save_ch_map_unet(
     base_map=None,
     arch_id=None,
     date_id=None,
-    precomputed_oval=None,
 ):
     fig, ax = plot_ch_map(
         row,
@@ -164,7 +163,6 @@ def save_ch_map_unet(
         oval=oval,
         set_title=False,
         base_map=base_map,
-        precomputed_oval=precomputed_oval,
     )
 
     architecture_id = arch_id if arch_id is not None else model.architecture_id
