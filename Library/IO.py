@@ -13,13 +13,18 @@ from Library.Config import paths
 
 
 def mask_fits(f):
-    hpc_coords = all_coordinates_from_map(f)
-    mask = coordinate_is_on_solar_disk(hpc_coords)
-    palette = f.cmap.copy()
-    palette.set_bad("black")
-    scaled_map = sunpy.map.Map(f.data, f.meta, mask=~mask)
-    ff = scaled_map.data
-    return ff
+    try:
+        hpc_coords = all_coordinates_from_map(f)
+        mask = coordinate_is_on_solar_disk(hpc_coords)
+        palette = f.cmap.copy()
+        palette.set_bad("black")
+        scaled_map = sunpy.map.Map(f.data, f.meta, mask=~mask)
+        ff = scaled_map.data
+        return ff
+    except Exception as e:
+        # If WCS is missing/invalid, skip disk masking to avoid crashing the pipeline
+        print(f"Warning: failed to mask FITS ({e}); returning raw data.")
+        return f.data
 
 
 def prepare_fits(path, mask_disk=True, clip_low=1, clip_high=99):
@@ -251,4 +256,3 @@ def pmap_path(row, architecture_id, date_range_id):
         "CH_MASK.png",
         "CH_MASK_" + architecture_id + date_range_id + "PX" + ".npy",
     )
-
