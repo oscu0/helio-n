@@ -7,6 +7,7 @@ dependencies:
   - python=3.12
   - pip
   - hdf5
+  - h5py
   - pip:
       # Deep learning
       - tensorflow==2.19.1
@@ -26,7 +27,6 @@ dependencies:
       - matplotlib-venn
       - seaborn
       - mahotas
-      - h5py
       - tqdm
       - sympy
       - xarray
@@ -51,10 +51,10 @@ dependencies:
       - cdasws
       - cdflib
       - imageio
-      - lxml
+      - lxml=6.0.2
       - pyspedas
-      - spacepy
-      - pyarrow
+      - spacepy=0.7.0
+      - pyarrow=22.0.0
       - rich
       - requests
       - psycopg
