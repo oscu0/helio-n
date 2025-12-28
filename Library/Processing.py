@@ -5,7 +5,7 @@ import numpy as np
 import PIL
 
 from skimage.morphology import (
-    binary_closing,
+    closing,
     disk,
     remove_small_objects,
     remove_small_holes,
@@ -63,13 +63,13 @@ def pmap_to_mask(
 
     # --- morphological smoothing ---
     # if smoothing_params["closing_radius"] > 0:
-    mask = binary_closing(mask, disk(smoothing_params["closing_radius"]))
+    mask = closing(mask, disk(smoothing_params["closing_radius"]))
 
     if smoothing_params["min_size"] > 0:
-        mask = remove_small_objects(mask, min_size=smoothing_params["min_size"])
+        mask = remove_small_objects(mask, max_size=smoothing_params["min_size"])
 
     if smoothing_params["hole_size"] > 0:
-        mask = remove_small_holes(mask, area_threshold=smoothing_params["hole_size"])
+        mask = remove_small_holes(mask, max_size=smoothing_params["hole_size"])
 
     mask_u8 = (mask > 0.5).astype(np.uint8) * 255
     img = PIL.Image.fromarray(mask_u8, mode="L")
