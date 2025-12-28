@@ -35,7 +35,7 @@ if len(df) == 0:
     )
     sys.exit(1)
 else:
-    batch_size = 8
+    batch_size = model.architecture["apply_batch_size"]
     rows = list(df.itertuples())
     pmap_paths = []
 
