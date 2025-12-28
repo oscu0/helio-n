@@ -15,7 +15,7 @@ dependencies:
       # Deep learning (CUDA)
       - tensorflow==2.16.2
       - nvidia-cudnn-cu12==8.9.4.25
-      - jax==0.4.34[cuda12]
+      - jax[cuda12]==0.4.34
 
       # Core numerics / imaging
       - numpy
