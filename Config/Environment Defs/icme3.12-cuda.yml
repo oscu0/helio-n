@@ -8,10 +8,11 @@ dependencies:
   - hdf5
   - pip:
       # Deep learning (CUDA runtime via pip wheels)
-      - tensorflow==2.19.1
-      - nvidia-cudnn-cu12
-      - nvidia-cublas-cu12<=12.2
-      - nvidia-cuda-runtime-cu12<=12.2
+      - tensorflow[and-cuda]==2.19.1
+      # - nvidia-cudnn-cu12
+      # - nvidia-cublas-cu12<=12.2
+      # - nvidia-cuda-runtime-cu12<=12.2
+      
       # - keras==3.12.0
       # - jax==0.4.34
       # - jaxlib==0.4.34

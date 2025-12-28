@@ -4,6 +4,11 @@ from pathlib import Path
 
 import numpy as np
 import PIL
+
+# TensorFlow C++ logging: WARNING+ERROR only
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+# absl / XLA logging: WARNING+ERROR only
+os.environ["ABSL_LOG_LEVEL"] = "2"
 import tensorflow as tf
 
 from Library import IO
