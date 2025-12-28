@@ -42,6 +42,9 @@ else:
     cpu_workers = os.cpu_count() or 12
     # plot_workers = max(1, min(batch_size * 3, cpu_workers))
     plot_workers = model.architecture["plot_threads"]
+    cpu_workers = os.cpu_count() or 12
+    # plot_workers = max(1, min(batch_size * 3, cpu_workers))
+    plot_workers = model.architecture["plot_threads"]
 
     # Limit how many batches we keep in-flight for plotting to avoid memory bloat
     max_inflight_batches = model.architecture["max_inflight_batches"] 
