@@ -4,6 +4,7 @@ import sys
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, Future
 
+import tensorflow as tf
 import numpy as np
 import pandas as pd
 import sunpy.map
@@ -19,7 +20,7 @@ from Library.Model import load_trained_model
 from Library.Processing import prepare_fits, save_pmap
 from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
-from Library.IO import pmap_path, resize_for_model
+from Library.IO import pmap_path
 from Library.Config import paths, plot_config
 
 
@@ -89,7 +90,6 @@ def main():
                 for row in batch_rows:
                     try:
                         img = prepare_fits(row.fits_path)
-                        img = resize_for_model(img, target_size)
                         imgs.append(img)
                         valid_rows.append(row)
                     except Exception as e:
@@ -100,6 +100,12 @@ def main():
                     continue
 
                 x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
+                if x.shape[1] != target_size:
+                    x = (
+                        tf.image.resize(
+                            x, [target_size, target_size], method="bilinear"
+                        ).numpy()
+                    )
 
                 try:
                     probs = model.compiled_infer(x)
