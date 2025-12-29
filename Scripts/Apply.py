@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use('Agg') 
 
 from Library.Model import load_trained_model
-from Library.Processing import prepare_fits
+from Library.Processing import prepare_fits, save_pmap
 from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
 from Library.IO import pmap_path, resize_for_model
@@ -51,7 +51,6 @@ def main():
 
     def plot_row(row, pmap):
         path = pmap_path(row, model.architecture_id, model.date_range_id)
-        np.save(path, pmap)
         base_map = sunpy.map.Map(row.fits_path)
         oval = generate_omask(row)
         save_ch_map_unet(
@@ -100,6 +99,7 @@ def main():
                     continue
 
                 x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
+    
                 try:
                     probs = model.compiled_infer(x)
                 except Exception as e:
@@ -111,6 +111,7 @@ def main():
 
                 for row, prob in zip(valid_rows, probs):
                     pmap = prob[..., 0]
+                    save_pmap(model, row, pmap)
                     fut = executor.submit(plot_row, row, pmap)
                     inflight.append(fut)
 
