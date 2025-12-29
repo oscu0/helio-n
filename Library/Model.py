@@ -325,8 +325,7 @@ class HelioNModel:
     def __repr__(self):
         return self.__str__()
 
-    def predict(self, x):
-        """Fast inference using precompiled tf.function; returns numpy array."""
-        out = self._infer(tf.convert_to_tensor(x), jit_compile=True)
-        return out.numpy()
+    @tf.function(jit_compile=True, reduce_retracing=True)
+    def _infer(x):
+        return self.model(x, training=False)
 
