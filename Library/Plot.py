@@ -18,6 +18,22 @@ from .Metrics import generate_omask
 cmap = ct.aia_color_table(u.Quantity(193, "Angstrom"))
 
 
+def px_to_pt(px: float) -> float:
+    return px * 72.0 / DPI
+
+
+def _setup_hgs_overlay(ax, m, grid_color="white"):
+    ax.coords.grid(False)
+    hgs_frame = frames.HeliographicStonyhurst()
+    hgs = ax.get_coords_overlay(hgs_frame)
+    hgs.grid(color=grid_color, alpha=0.4, linestyle="--", linewidth=px_to_pt(0.7))
+    for c in hgs:
+        c.set_ticks(spacing=10 * u.deg, color=grid_color, number=None)
+        c.set_ticklabel_visible(False)
+        c.set_axislabel("")
+    return hgs
+
+
 def plot_ch_map(
     row,
     source="unet",
@@ -29,25 +45,8 @@ def plot_ch_map(
     ax=None,
     set_title=False,
     base_map=None,
+    base=None,
 ):
-    FIGSIZE_IN = (TARGET_PX / DPI, TARGET_PX / DPI)
-
-    def px_to_pt(px: float) -> float:
-        return px * 72.0 / DPI
-
-    def _setup_hgs_overlay(ax, m, grid_color="white"):
-        ax.coords.grid(False)
-        hgs_frame = frames.HeliographicStonyhurst()
-        hgs = ax.get_coords_overlay(hgs_frame)
-        hgs.grid(color=grid_color, alpha=0.4, linestyle="--", linewidth=px_to_pt(0.7))
-        for c in hgs:
-            c.set_ticks(spacing=10 * u.deg, color=grid_color, number=None)
-            c.set_ticklabel_visible(False)
-            c.set_axislabel("")
-        return hgs
-
-    m = base_map if base_map is not None else sunpy.map.Map(row.fits_path)
-
     if oval is None:
         oval = generate_omask(row)
 
@@ -71,7 +70,57 @@ def plot_ch_map(
     mask = np.flipud(mask)
     oval = np.flipud(oval)
 
-    # ---- create fig/ax ONLY if not embedding ----
+    if base is None:
+        fig, ax = plot_ch_base(
+            row,
+            mask,
+            oval,
+            show_fits=show_fits,
+            ax=ax,
+            set_title=set_title,
+            base_map=base_map,
+            title=title,
+        )
+    else:
+        fig, ax = base
+
+    ax.contour(
+        mask,
+        levels=[0.5],
+        colors="red",
+        linewidths=px_to_pt(2),
+        antialiased=True,
+        transform=ax.get_transform("pixel"),
+    )
+    ax.contour(
+        oval.astype(float),
+        levels=[0.5],
+        colors="yellow",
+        linewidths=px_to_pt(3),
+        antialiased=True,
+        transform=ax.get_transform("pixel"),
+    )
+
+    return fig, ax
+
+
+def plot_ch_base(
+    row,
+    mask,
+    oval,
+    show_fits=True,
+    ax=None,
+    set_title=False,
+    base_map=None,
+    title="",
+):
+    """
+    Draw the base CH plot (background + grid) without contours.
+    Returns (fig, ax) ready for overlay contours.
+    """
+    FIGSIZE_IN = (TARGET_PX / DPI, TARGET_PX / DPI)
+    m = base_map if base_map is not None else sunpy.map.Map(row.fits_path)
+
     created_fig = False
     if ax is None:
         fig = plt.figure(figsize=FIGSIZE_IN, dpi=DPI)
@@ -81,7 +130,6 @@ def plot_ch_map(
     else:
         fig = ax.figure  # embed into existing figure
 
-    # Draw base layer
     if show_fits:
         m.plot(
             axes=ax,
@@ -118,29 +166,10 @@ def plot_ch_map(
     ax.set_ylim(-0.5, TARGET_PX - 0.5)
     ax.set_aspect("equal", adjustable="box")
 
-    # 🔴 ONLY full-bleed when we created the axes ourselves
     if created_fig:
         ax.set_position([0, 0, 1, 1])
 
     _setup_hgs_overlay(ax, m, grid_color=grid_color)
-
-    ax.contour(
-        mask,
-        levels=[0.5],
-        colors="red",
-        linewidths=px_to_pt(2),
-        antialiased=True,
-        transform=ax.get_transform("pixel"),
-    )
-    ax.contour(
-        oval.astype(float),
-        levels=[0.5],
-        colors="yellow",
-        linewidths=px_to_pt(3),
-        antialiased=True,
-        transform=ax.get_transform("pixel"),
-    )
-
     return fig, ax
 
 

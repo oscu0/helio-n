@@ -12,7 +12,8 @@ from tqdm import tqdm
 sys.path.append("..")
 
 import matplotlib
-matplotlib.use('Agg') 
+
+matplotlib.use("Agg")
 
 from Library.Model import load_trained_model
 from Library.Processing import prepare_fits, save_pmap
@@ -99,7 +100,7 @@ def main():
                     continue
 
                 x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
-    
+
                 try:
                     probs = model.compiled_infer(x)
                 except Exception as e:
