@@ -1,0 +1,18 @@
+{
+    "risc1": {
+        "target_px": 1024,
+        "dpi": 128,
+        "apply_batch_size": 64,
+        "max_inflight_batches": 12,
+        "plot_threads": 12,
+        "plot_chunk_size": 16
+    },
+    "miracle": {
+        "target_px": 1024,
+        "dpi": 128,
+        "apply_batch_size": 64,
+        "max_inflight_batches": 24,
+        "plot_threads": 32,
+        "plot_chunk_size": 32
+    }
+}

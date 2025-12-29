@@ -16,5 +16,12 @@ with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
 
 paths["artifact_root"] = "./Outputs/Artifacts/" + hostname + "/"
 
-TARGET_PX = 1024
-DPI = 128
+with open(SCRIPT_DIR / "../Config/Plot.json", "r") as f:
+    p = json.load(f)
+    if hostname in p:
+        plot_config = p[hostname]
+    else:
+        plot_config = p[p.keys()[0]]  # Default to first entry if hostname not found
+
+TARGET_PX = int(plot_config.get("target_px", 1024))
+DPI = int(plot_config.get("dpi", 128))

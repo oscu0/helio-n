@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 import os
 import sys
-import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, Future
 from collections import deque
-from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor, Future
 
 import numpy as np
 import pandas as pd
@@ -18,64 +16,7 @@ from Library.Processing import prepare_fits
 from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
 from Library.IO import pmap_path
-from Library.Config import paths
-
-
-def render_batch(task):
-    """
-    Worker process: load saved pmaps and generate outputs.
-    Expects task dict with keys: rows (list of dicts), postprocessing, arch_id, date_id, fast_mask.
-    """
-    postprocessing = task["postprocessing"]
-    arch_id = task["arch_id"]
-    date_id = task["date_id"]
-    fast_mask = task.get("fast_mask", True)
-    rows = task["rows"]
-    results = []
-
-    for info in rows:
-        try:
-            pmap = np.load(info["pmap_path"])
-            base_map = sunpy.map.Map(info["fits_path"])
-            row_obj = SimpleNamespace(
-                fits_path=info["fits_path"], mask_path=info["mask_path"]
-            )
-            oval = generate_omask(row_obj)
-
-            save_ch_map_unet(
-                row_obj,
-                None,
-                postprocessing,
-                pmap,
-                oval,
-                base_map,
-                arch_id,
-                date_id,
-            )
-            save_ch_map_unet(
-                row_obj,
-                None,
-                "P0",
-                pmap,
-                oval,
-                base_map,
-                arch_id,
-                date_id,
-            )
-            save_ch_mask_only_unet(
-                row_obj,
-                None,
-                postprocessing,
-                pmap,
-                fast_mask,
-                arch_id,
-                date_id,
-            )
-            results.append(info["pmap_path"])
-        except Exception as e:
-            print(f"Error plotting {info.get('fits_path', '?')}: {e}")
-            results.append(None)
-    return results
+from Library.Config import paths, plot_config
 
 
 def main():
@@ -96,24 +37,45 @@ def main():
         )
         sys.exit(1)
 
-    batch_size = model.architecture["apply_batch_size"]
-    plot_workers = model.architecture.get("plot_threads", os.cpu_count() or 4)
-    max_inflight_batches = model.architecture.get("max_inflight_batches", 2)
-    plot_chunk_size = max(1, int(model.architecture.get("plot_chunk_size", 1)))
-    max_inflight_plots = max(
-        1,
-        int(
-            model.architecture.get(
-                "max_inflight_plots", max_inflight_batches * 4 * plot_chunk_size
-            )
-        ),
-    )
+    batch_size = plot_config["apply_batch_size"]
+    plot_workers = plot_config["plot_threads"]
+    max_inflight_plots = plot_config["max_inflight_plots"]
+
     rows = list(df.itertuples())
     pmap_paths = []
     inflight: deque[Future] = deque()
 
-    ctx = mp.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=plot_workers, mp_context=ctx) as executor:
+    def plot_row(row, pmap):
+        path = pmap_path(row, model.architecture_id, model.date_range_id)
+        np.save(path, pmap)
+        base_map = sunpy.map.Map(row.fits_path)
+        oval = generate_omask(row)
+        save_ch_map_unet(
+            row,
+            model,
+            postprocessing,
+            pmap,
+            oval,
+            base_map,
+        )
+        save_ch_map_unet(
+            row,
+            model,
+            "P0",
+            pmap,
+            oval,
+            base_map,
+        )
+        save_ch_mask_only_unet(
+            row,
+            model,
+            postprocessing,
+            pmap,
+            True,
+        )
+        return path
+
+    with ThreadPoolExecutor(max_workers=plot_workers) as executor:
         with tqdm(total=len(rows), desc="Generating pmaps") as pbar:
             for offset in range(0, len(rows), batch_size):
                 batch_rows = rows[offset : offset + batch_size]
@@ -141,51 +103,18 @@ def main():
                     pbar.update(len(batch_rows))
                     continue
 
-                task_rows = []
                 for row, prob in zip(valid_rows, probs):
-                    try:
-                        pmap = prob[..., 0]
-                        path = pmap_path(
-                            row, model.architecture_id, model.date_range_id
-                        )
-                        np.save(path, pmap)
-                        task_rows.append(
-                            {
-                                "fits_path": row.fits_path,
-                                "mask_path": row.mask_path,
-                                "pmap_path": path,
-                            }
-                        )
-                    except Exception as e:
-                        print(f"Error preparing outputs for {row.Index}: {e}")
-
-                if not task_rows:
-                    pbar.update(len(batch_rows))
-                    continue
-
-                # chunk rows to keep more processes busy
-                for i in range(0, len(task_rows), plot_chunk_size):
-                    chunk = task_rows[i : i + plot_chunk_size]
-                    fut = executor.submit(
-                        render_batch,
-                        {
-                            "rows": chunk,
-                            "postprocessing": postprocessing,
-                            "arch_id": model.architecture_id,
-                            "date_id": model.date_range_id,
-                            "fast_mask": True,
-                        },
-                    )
+                    pmap = prob[..., 0]
+                    fut = executor.submit(plot_row, row, pmap)
                     inflight.append(fut)
 
-                # keep in-flight plot tasks bounded
-                while len(inflight) >= max_inflight_plots:
-                    oldest = inflight.popleft()
-                    try:
-                        res = oldest.result()
-                        pmap_paths.extend(res)
-                    except Exception as e:
-                        print(f"Error in plotting batch: {e}")
+                    while len(inflight) >= max_inflight_plots:
+                        oldest = inflight.popleft()
+                        try:
+                            res = oldest.result()
+                            pmap_paths.append(res)
+                        except Exception as e:
+                            print(f"Error in plotting task: {e}")
 
                 pbar.update(len(batch_rows))
 
@@ -193,9 +122,9 @@ def main():
                 fut = inflight.popleft()
                 try:
                     res = fut.result()
-                    pmap_paths.extend(res)
+                    pmap_paths.append(res)
                 except Exception as e:
-                    print(f"Error in plotting batch: {e}")
+                    print(f"Error in plotting task: {e}")
 
 
 if __name__ == "__main__":
