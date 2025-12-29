@@ -18,7 +18,7 @@ MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
 
 from Library.Config import *
-from Library.IO import prepare_fits, pmap_path, prepare_pmap
+from Library.IO import prepare_fits, pmap_path, prepare_pmap, resize_for_model
 
 
 def fits_to_pmap(model, img2d):
@@ -28,16 +28,14 @@ def fits_to_pmap(model, img2d):
     if img.ndim != 2:
         raise ValueError(f"Expected 2D array, got shape {img.shape}")
 
-    if img.shape != (img_size, img_size):
-        # Use float-preserving PIL mode "F", bilinear interpolation
-        pil_img = PIL.Image.fromarray(img.astype(np.float32), mode="F")
-        pil_img = pil_img.resize((img_size, img_size), resample=PIL.Image.BILINEAR)
-        img = np.array(pil_img, dtype=np.float32)
+    img = resize_for_model(img, img_size)
 
     x = img[np.newaxis, ..., np.newaxis]  # (1, H, W, 1)
 
-    # Prefer the compiled inference path on the wrapped model, fall back to predict
-    if hasattr(model, "predict"):
+    # Prefer the compiled inference path on the wrapped model, fall back as needed
+    if hasattr(model, "compiled_infer"):
+        prob = model.compiled_infer(x)[0, ..., 0]
+    elif hasattr(model, "predict"):
         prob = model.predict(x)[0, ..., 0]
     else:
         prob = model.model.predict(x, verbose=0)[0, ..., 0]

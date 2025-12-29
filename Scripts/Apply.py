@@ -11,11 +11,14 @@ from tqdm import tqdm
 
 sys.path.append("..")
 
+import matplotlib
+matplotlib.use('Agg') 
+
 from Library.Model import load_trained_model
 from Library.Processing import prepare_fits
 from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
-from Library.IO import pmap_path
+from Library.IO import pmap_path, resize_for_model
 from Library.Config import paths, plot_config
 
 
@@ -40,6 +43,7 @@ def main():
     batch_size = plot_config["apply_batch_size"]
     plot_workers = plot_config["plot_threads"]
     max_inflight_plots = plot_config["max_inflight_plots"]
+    target_size = model.architecture.get("img_size", 256)
 
     rows = list(df.itertuples())
     pmap_paths = []
@@ -84,7 +88,9 @@ def main():
                 valid_rows = []
                 for row in batch_rows:
                     try:
-                        imgs.append(prepare_fits(row.fits_path))
+                        img = prepare_fits(row.fits_path)
+                        img = resize_for_model(img, target_size)
+                        imgs.append(img)
                         valid_rows.append(row)
                     except Exception as e:
                         print(f"Error loading {row.Index}: {e}")
@@ -95,7 +101,7 @@ def main():
 
                 x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
                 try:
-                    probs = model.predict(x)
+                    probs = model.compiled_infer(x)
                 except Exception as e:
                     print(
                         f"Error batch predicting starting at {batch_rows[0].Index}: {e}"

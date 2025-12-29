@@ -42,6 +42,19 @@ def prepare_fits(path, mask_disk=True, clip_low=1, clip_high=99):
     return ff
 
 
+def resize_for_model(img2d: np.ndarray, target_size: int) -> np.ndarray:
+    """
+    Resize a 2-D float image to the model input size using PIL bilinear in float mode.
+    Keeps values in float32; no normalization changes beyond interpolation.
+    """
+    if img2d.shape == (target_size, target_size):
+        return img2d.astype(np.float32, copy=False)
+
+    pil_img = PIL.Image.fromarray(img2d.astype(np.float32), mode="F")
+    pil_img = pil_img.resize((target_size, target_size), resample=PIL.Image.BILINEAR)
+    return np.array(pil_img, dtype=np.float32)
+
+
 def prepare_hmi_jpg(jpg_path, target_size=1024):
     """
     Load 512px HMI JPEG (grayscale), upscale to target_size.

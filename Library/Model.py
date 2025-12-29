@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -311,8 +312,9 @@ class HelioNModel:
         self.architecture = self._read_json(self.architecture_path)
         self.date_range = self._read_json(self.date_range_path)
 
-        # Compile a no-tracing inference fn for reuse
-        self._infer = tf.function(lambda x: self.model(x, training=False))
+        # Lazily-built inference fn; keep None until first predict to avoid device issues
+        self._infer = None
+        self._prefer_jit = platform.system().lower().startswith("linux")
 
     @staticmethod
     def _read_json(path: Path) -> dict:
@@ -325,7 +327,48 @@ class HelioNModel:
     def __repr__(self):
         return self.__str__()
 
-    @tf.function(jit_compile=True, reduce_retracing=True)
-    def _infer(x):
-        return self.model(x, training=False)
+    def compiled_infer(self, x):
+        """Fast inference with a cached tf.function; falls back to direct call on failure."""
+        x_tensor = tf.convert_to_tensor(x)
 
+        if self._infer is None:
+            self._infer = self._build_infer(self._prefer_jit)
+
+        if self._infer is not None:
+            try:
+                return self._infer(x_tensor).numpy()
+            except Exception:
+                # If a jit-compiled fn fails, retry once without jit
+                if self._prefer_jit:
+                    self._infer = self._build_infer(False)
+                    if self._infer is not None:
+                        try:
+                            return self._infer(x_tensor).numpy()
+                        except Exception:
+                            pass
+                # Invalidate and fall back to eager call
+                self._infer = None
+
+        return self.model(x_tensor, training=False).numpy()
+
+    # Backwards-compatible alias
+    # def predict(self, x):
+    #     return self.compiled_infer(x)
+
+    def _build_infer(self, prefer_jit: bool):
+        if prefer_jit:
+            try:
+                return tf.function(
+                    lambda t: self.model(t, training=False),
+                    jit_compile=True,
+                    reduce_retracing=True,
+                )
+            except Exception:
+                pass
+
+        try:
+            return tf.function(
+                lambda t: self.model(t, training=False), reduce_retracing=True
+            )
+        except Exception:
+            return None
