@@ -40,12 +40,13 @@ def project(map, mask):
     return proj_mask
 
 
-def ch_abs_area(row, pmap=None, reference_mode=False, oval=True):
+def ch_abs_area(row, model=None, pmap=None, reference_mode=False, oval=True):
     m = sunpy.map.Map(row.fits_path)
-
+    if pmap is None and model is None and not reference_mode:
+        raise ValueError("Either model or pmap must be provided unless in reference mode.")
+    
     if pmap is None and not reference_mode:
-        pmap = Processing.find_or_make_pmap(row, None)
-
+        pmap = Processing.find_or_make_pmap(row, model)
     if reference_mode:
         ch_mask_map = prepare_mask(row.mask_path)
     else:
@@ -74,8 +75,8 @@ def sun_area(row):
     return project(map, mask).sum()
 
 
-def ch_rel_area(row, pmap=None, reference_mode=False):
-    ch_area = ch_abs_area(row, pmap, reference_mode, oval=True)
+def ch_rel_area(row, model=None, pmap=None, reference_mode=False):
+    ch_area = ch_abs_area(row, model, pmap, reference_mode, oval=True)
 
     # print("OMASK AREA:", omask_area(row, generate_omask(row)))
     # print("CH AREA:", ch_area)
