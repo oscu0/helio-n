@@ -2,7 +2,7 @@
     "risc1": {
         "target_px": 1024,
         "dpi": 128,
-        "apply_batch_size": 8,
+        "apply_batch_size": 32,
         "max_inflight_plots": 40,
         "plot_threads": 8
     },
