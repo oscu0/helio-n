@@ -13,7 +13,7 @@ if date_range_id is None or architecture_id is None:
     )
     sys.exit(1)
 
-from Library.Config import paths
+from Library.Config import paths, train_batch_size
 
 import sys
 
@@ -30,6 +30,7 @@ date_range = json.load(
 architecture = json.load(
     open(BASE_DIR + "Config/Model/Architecture/" + (architecture_id + ".json"))
 )
+architecture["batch_size"] = train_batch_size
 
 df = pd.read_parquet(paths["artifact_root"] + "Paths.parquet")
 train_df = df[date_range["start"] : date_range["end"]]

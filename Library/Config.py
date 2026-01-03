@@ -7,21 +7,27 @@ hostname = socket.gethostname()
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-with open(SCRIPT_DIR / "../Config/Paths.json", "r") as f:
-    p = json.load(f)
-    if hostname in p:
-        paths = p[hostname]
-    else:
-        paths = p[p.keys()[0]]  # Default to first entry if hostname not found
+with open(SCRIPT_DIR / "../Config/Machine.json", "r") as f:
+    machines = json.load(f)
+    machine_config = machines.get(hostname, next(iter(machines.values())))
 
-paths["artifact_root"] = "./Outputs/Artifacts/" + hostname + "/"
+paths = {
+    "fits_root": machine_config["fits_root"],
+    "masks_root": machine_config["masks_root"],
+    "hmi_root": machine_config["hmi_root"],
+    "artifact_root": machine_config["artifact_root"],
+}
+
+apply_config = {
+    "batch_size": machine_config["apply_batch_size"],
+    "max_inflight_plots": machine_config["max_inflight_plots"],
+    "plot_threads": machine_config["plot_threads"],
+}
+
+train_batch_size = int(machine_config["train_batch_size"])
 
 with open(SCRIPT_DIR / "../Config/Plot.json", "r") as f:
-    p = json.load(f)
-    if hostname in p:
-        plot_config = p[hostname]
-    else:
-        plot_config = p[p.keys()[0]]  # Default to first entry if hostname not found
+    plot_config = json.load(f)
 
-TARGET_PX = int(plot_config.get("target_px", 1024))
-DPI = int(plot_config.get("dpi", 128))
+TARGET_PX = int(plot_config["target_px"])
+DPI = int(plot_config["dpi"])
