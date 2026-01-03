@@ -107,7 +107,7 @@ def build_unet(
 ):
     input_shape = (model_params["img_size"], model_params["img_size"], 1)
     base_filters = model_params["base_filters"]
-    inputs = keras.Input(shape=input_shape)
+    inputs = tf.keras.Input(shape=input_shape)
 
     # ----- Encoder -----
     c1 = double_conv(inputs, base_filters)  # 256 x 256,  f
