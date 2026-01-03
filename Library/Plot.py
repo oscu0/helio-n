@@ -44,10 +44,10 @@ def plot_ch_map(
     show_fits=True,
     ax=None,
     set_title=False,
-    base_map=None,
-    base=None,
+    map_obj=None,
     arch_id=None,
     date_id=None,
+    base_fig_ax=None,
 ):
     if oval is None:
         oval = generate_omask(row)
@@ -74,21 +74,19 @@ def plot_ch_map(
     mask = np.flipud(mask)
     oval = np.flipud(oval)
 
-    if base is None:
-        fig, ax = plot_ch_base(
-            row,
-            mask,
-            oval,
-            show_fits=show_fits,
-            ax=ax,
-            set_title=set_title,
-            base_map=base_map,
-            title=title,
-            arch_id=arch_id,
-            date_id=date_id,
-        )
-    else:
-        fig, ax = base
+    fig, ax = plot_ch_base(
+        row,
+        mask,
+        oval,
+        show_fits=show_fits,
+        ax=ax,
+        set_title=set_title,
+        map_obj=map_obj,
+        title=title,
+        arch_id=arch_id,
+        date_id=date_id,
+        base_fig_ax=base_fig_ax,
+    )
 
     ax.contour(
         mask,
@@ -117,26 +115,32 @@ def plot_ch_base(
     show_fits=True,
     ax=None,
     set_title=False,
-    base_map=None,
+    map_obj=None,
     title="",
     arch_id=None,
     date_id=None,
+    base_fig_ax=None,
 ):
     """
     Draw the base CH plot (background + grid) without contours.
     Returns (fig, ax) ready for overlay contours.
     """
     FIGSIZE_IN = (TARGET_PX / DPI, TARGET_PX / DPI)
-    m = base_map if base_map is not None else sunpy.map.Map(row.fits_path)
-
-    created_fig = False
-    if ax is None:
-        fig = plt.figure(figsize=FIGSIZE_IN, dpi=DPI)
-        fig.set_constrained_layout(False)
-        ax = fig.add_axes([0, 0, 1, 1], projection=m)
-        created_fig = True
+    if base_fig_ax is not None:
+        fig, ax = base_fig_ax
+        m = map_obj if map_obj is not None else sunpy.map.Map(row.fits_path)
+        created_fig = False
     else:
-        fig = ax.figure  # embed into existing figure
+        m = map_obj if map_obj is not None else sunpy.map.Map(row.fits_path)
+
+        created_fig = False
+        if ax is None:
+            fig = plt.figure(figsize=FIGSIZE_IN, dpi=DPI)
+            fig.set_constrained_layout(False)
+            ax = fig.add_axes([0, 0, 1, 1], projection=m)
+            created_fig = True
+        else:
+            fig = ax.figure  # embed into existing figure
 
     if show_fits:
         m.plot(
@@ -187,10 +191,9 @@ def save_ch_map_unet(
     postprocessing="P0",
     pmap=None,
     oval=None,
-    base_map=None,
+    map_obj=None,
     arch_id=None,
     date_id=None,
-    base=None,
 ):
     fig, ax = plot_ch_map(
         row,
@@ -200,8 +203,7 @@ def save_ch_map_unet(
         postprocessing=postprocessing,
         oval=oval,
         set_title=False,
-        base_map=base_map,
-        base=base,
+        map_obj=map_obj,
         arch_id=arch_id,
         date_id=date_id,
     )
