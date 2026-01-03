@@ -28,7 +28,7 @@ from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
 from Library.IO import pmap_path
 from Library.Config import paths, apply_config
-chunk_size = apply_config["chunk_size"]
+
 
 
 
@@ -90,9 +90,11 @@ def main():
         sys.exit(1)
 
     batch_size = apply_config["batch_size"]
+    chunk_size = apply_config["chunk_size"]
     plot_workers = apply_config["plot_threads"]
-    max_inflight_plots = apply_config["max_inflight_plots"]
+    max_inflight_plots = apply_config["max_inflight_plots"] / chunk_size
     target_size = model.architecture["img_size"]
+
 
     rows = list(df.itertuples())
     pmap_paths = []
