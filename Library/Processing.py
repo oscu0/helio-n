@@ -86,7 +86,8 @@ def pmap_to_mask(
 def save_pmap(model, row, pmap=None):
     path = pmap_path(row, model.architecture_id, model.date_range_id)
     if pmap is None:
-        pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+        _, data = prepare_fits(row.fits_path)
+        pmap = fits_to_pmap(model, data)
     np.save(path, pmap)
     return path, pmap
 
@@ -95,5 +96,6 @@ def find_or_make_pmap(row, model):
     try:
         pmap = prepare_pmap(pmap_path(row, model.architecture_id, model.date_range_id))
     except FileNotFoundError:
-        pmap = fits_to_pmap(model, prepare_fits(row.fits_path))
+        _, data = prepare_fits(row.fits_path)
+        pmap = fits_to_pmap(model, data)
     return pmap

@@ -28,18 +28,22 @@ def mask_fits(f):
 
 
 def prepare_fits(path, mask_disk=True, clip_low=1, clip_high=99):
-    f = sunpy.map.Map(path)
+    """
+    Load FITS as sunpy map and normalized data array.
+    Returns (map_obj, map_data) where map_data is flipped, clipped, and normalized.
+    """
+    map_obj = sunpy.map.Map(path)
     if mask_disk:
-        ff = mask_fits(f).data
+        map_data = mask_fits(map_obj).data
     else:
-        ff = f.data
-    ff = np.flipud(ff)
+        map_data = map_obj.data
+    map_data = np.flipud(map_data)
 
-    low = np.percentile(ff, clip_low)
-    high = np.percentile(ff, clip_high)
-    ff = np.clip(ff, low, high)
-    ff = (ff - low) / (high - low + 1e-6)
-    return ff
+    low = np.percentile(map_data, clip_low)
+    high = np.percentile(map_data, clip_high)
+    map_data = np.clip(map_data, low, high)
+    map_data = (map_data - low) / (high - low + 1e-6)
+    return map_obj, map_data
 
 
 def resize_for_model(img2d: np.ndarray, target_size: int) -> np.ndarray:

@@ -43,7 +43,8 @@ def _load_pair_np(fits_path, mask_path, model_params):
     if isinstance(mask_path, (bytes, np.bytes_)):
         mask_path = mask_path.decode("utf-8")
 
-    img = np.asarray(IO.prepare_fits(fits_path), dtype=np.float32)
+    _, img = IO.prepare_fits(fits_path)
+    img = np.asarray(img, dtype=np.float32)
     mask = np.asarray(IO.prepare_mask(mask_path), dtype=np.float32)
 
     img_resized = IO.resize_for_model(img, model_params["img_size"])
@@ -121,7 +122,8 @@ def load_pair(fits_path, mask_path, model_params):
         mask_path = mask_path.decode("utf-8")
 
     # load 2-D arrays
-    img = np.asarray(IO.prepare_fits(fits_path), dtype=np.float32)
+    _, img = IO.prepare_fits(fits_path)
+    img = np.asarray(img, dtype=np.float32)
     mask = np.asarray(IO.prepare_mask(mask_path), dtype=np.float32)
 
     if model_params["avoid_requantization"]:

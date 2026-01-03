@@ -51,9 +51,8 @@ def main():
     pmap_paths = []
     inflight: deque[Future] = deque()
 
-    def plot_row(row, pmap):
+    def plot_row(row, pmap, base_map):
         path = pmap_path(row, model.architecture_id, model.date_range_id)
-        base_map = sunpy.map.Map(row.fits_path)
         oval = generate_omask(row)
         save_ch_map_unet(
             row,
@@ -87,11 +86,13 @@ def main():
 
                 imgs = []
                 valid_rows = []
+                base_maps = []
                 for row in batch_rows:
                     try:
-                        img = prepare_fits(row.fits_path)
+                        base_map, img = prepare_fits(row.fits_path)
                         imgs.append(img)
                         valid_rows.append(row)
+                        base_maps.append(base_map)
                     except Exception as e:
                         print(f"Error loading {row.Index}: {e}")
 
@@ -101,11 +102,9 @@ def main():
 
                 x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
                 if x.shape[1] != target_size:
-                    x = (
-                        tf.image.resize(
-                            x, [target_size, target_size], method="bilinear"
-                        ).numpy()
-                    )
+                    x = tf.image.resize(
+                        x, [target_size, target_size], method="bilinear"
+                    ).numpy()
 
                 try:
                     probs = model.compiled_infer(x)
@@ -116,10 +115,10 @@ def main():
                     pbar.update(len(batch_rows))
                     continue
 
-                for row, prob in zip(valid_rows, probs):
+                for row, prob, base_map in zip(valid_rows, probs, base_maps):
                     pmap = prob[..., 0]
                     save_pmap(model, row, pmap)
-                    fut = executor.submit(plot_row, row, pmap)
+                    fut = executor.submit(plot_row, row, pmap, base_map)
                     inflight.append(fut)
 
                     while len(inflight) >= max_inflight_plots:
