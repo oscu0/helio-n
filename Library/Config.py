@@ -22,6 +22,7 @@ apply_config = {
     "batch_size": machine_config["apply_batch_size"],
     "max_inflight_plots": machine_config["max_inflight_plots"],
     "plot_threads": machine_config["plot_threads"],
+    "chunk_size": machine_config["chunk_size"]
 }
 
 train_batch_size = int(machine_config["train_batch_size"])

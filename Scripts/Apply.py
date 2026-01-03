@@ -28,7 +28,7 @@ from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
 from Library.IO import pmap_path
 from Library.Config import paths, apply_config
-
+chunk_size = apply_config["chunk_size"]
 
 
 
@@ -135,77 +135,82 @@ def main():
                     pbar.update(len(batch_rows))
                     continue
 
-                stack_start = time.perf_counter()
-                x = np.stack(imgs)[..., np.newaxis].astype(np.float32)
-                stack_time = time.perf_counter() - stack_start
-
-                resize_start = time.perf_counter()
-                if x.shape[1] != target_size:
-                    x = tf.image.resize(
-                        x, [target_size, target_size], method="bilinear"
-                    ).numpy()
-                resize_time = time.perf_counter() - resize_start
-
-                # Pad final partial batch to full size to avoid new XLA shapes
-                if x.shape[0] < batch_size:
-                    pad = batch_size - x.shape[0]
-                    x = np.pad(
-                        x,
-                        ((0, pad), (0, 0), (0, 0), (0, 0)),
-                        mode="constant",
-                    )
-                    valid_rows += [None] * pad  # placeholders to keep alignment
-                    probs_mask = [1] * (batch_size - pad) + [0] * pad
-                else:
-                    probs_mask = [1] * batch_size
-
-                infer_start = time.perf_counter()
-                try:
-                    probs = model.compiled_infer(x)
-                except Exception as e:
-                    print(
-                        f"Error batch predicting starting at {batch_rows[0].Index}: {e}"
-                    )
-                    pbar.update(len(batch_rows))
-                    continue
-                infer_time = time.perf_counter() - infer_start
-                total_infer_time += infer_time
-
-                submit_start = time.perf_counter()
+                # Accumulate per-batch timings across chunks
+                stack_time = 0.0
+                resize_time = 0.0
+                infer_time = 0.0
+                submit_time = 0.0
                 wait_time = 0.0
-                for row, prob, keep in zip(valid_rows, probs, probs_mask):
-                    if keep == 0 or row is None:
+
+                for start in range(0, len(valid_rows), chunk_size):
+                    chunk_rows = valid_rows[start : start + chunk_size]
+                    chunk_imgs = imgs[start : start + chunk_size]
+
+                    stack_start = time.perf_counter()
+                    x = np.stack(chunk_imgs)[..., np.newaxis].astype(np.float32)
+                    stack_time += time.perf_counter() - stack_start
+
+                    resize_start = time.perf_counter()
+                    if x.shape[1] != target_size:
+                        x = tf.image.resize(
+                            x, [target_size, target_size], method="bilinear"
+                        ).numpy()
+                    resize_time += time.perf_counter() - resize_start
+
+                    if x.shape[0] < chunk_size:
+                        pad = chunk_size - x.shape[0]
+                        x = np.pad(x, ((0, pad), (0, 0), (0, 0), (0, 0)), mode="constant")
+                        chunk_rows = chunk_rows + [None] * pad
+                        mask_keep = [1] * (chunk_size - pad) + [0] * pad
+                    else:
+                        mask_keep = [1] * chunk_size
+
+                    infer_start = time.perf_counter()
+                    try:
+                        probs = model.compiled_infer(x)
+                    except Exception as e:
+                        print(
+                            f"Error batch predicting starting at {batch_rows[0].Index}: {e}"
+                        )
+                        pbar.update(len(batch_rows))
                         continue
-                    pmap = prob[..., 0]
-                    save_pmap(model, row, pmap)
-                    job = {
-                        "fits_path": row.fits_path,
-                        "mask_path": row.mask_path,
-                        "pmap_path": pmap_path(
-                            row, model.architecture_id, model.date_range_id
-                        ),
-                        "pmap": pmap,
-                        "postprocessing": postprocessing,
-                        "arch_id": model.architecture_id,
-                        "date_id": model.date_range_id,
-                    }
-                    fut = executor.submit(render_job, job)
-                    inflight.append(fut)
-                    del pmap
+                    infer_time += time.perf_counter() - infer_start
+                    total_infer_time += infer_time
 
-                    while len(inflight) >= max_inflight_plots:
-                        oldest = inflight.popleft()
-                        wait_start = time.perf_counter()
-                        try:
-                            res = oldest.result()
-                            pmap_paths.append(res)
-                        except Exception as e:
-                            print(f"Error in plotting task: {e}")
-                        dt = time.perf_counter() - wait_start
-                        wait_time += dt
-                        total_plot_wait += dt
+                    submit_start = time.perf_counter()
+                    for row, prob, keep in zip(chunk_rows, probs, mask_keep):
+                        if keep == 0 or row is None:
+                            continue
+                        pmap = prob[..., 0]
+                        save_pmap(model, row, pmap)
+                        job = {
+                            "fits_path": row.fits_path,
+                            "mask_path": row.mask_path,
+                            "pmap_path": pmap_path(
+                                row, model.architecture_id, model.date_range_id
+                            ),
+                            "pmap": pmap,
+                            "postprocessing": postprocessing,
+                            "arch_id": model.architecture_id,
+                            "date_id": model.date_range_id,
+                        }
+                        fut = executor.submit(render_job, job)
+                        inflight.append(fut)
+                        del pmap
 
-                submit_time = time.perf_counter() - submit_start
+                        while len(inflight) >= max_inflight_plots:
+                            oldest = inflight.popleft()
+                            wait_start = time.perf_counter()
+                            try:
+                                res = oldest.result()
+                                pmap_paths.append(res)
+                            except Exception as e:
+                                print(f"Error in plotting task: {e}")
+                            dt = time.perf_counter() - wait_start
+                            wait_time += dt
+                            total_plot_wait += dt
+
+                    submit_time += time.perf_counter() - submit_start
 
                 batch_wall = time.perf_counter() - batch_start
                 imgs_n = len(valid_rows)
