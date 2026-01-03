@@ -77,7 +77,7 @@ def pair_generator(fits_paths, mask_paths, model_params, augment=False):
             batch_idx = idxs[i : i + model_params["batch_size"]]
             imgs, masks = [], []
             for j in batch_idx:
-                img, mask = load_pair(fits_paths[j], mask_paths[j])
+                img, mask = load_pair(fits_paths[j], mask_paths[j], model_params)
                 if augment:
                     img, mask = augment_pair(img, mask)
 
@@ -237,7 +237,7 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
 
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
-            paths["model_path"],
+            path,
             monitor="val_loss",
             save_best_only=True,
             save_weights_only=False,
