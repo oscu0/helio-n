@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import os
+os.environ["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 0=all, 1=INFO-, 2=WARNING-, 3=ERROR-
+
 import sys
 import time
 import multiprocessing as mp
@@ -25,6 +28,8 @@ from Library.Plot import save_ch_map_unet, save_ch_mask_only_unet
 from Library.CH import generate_omask
 from Library.IO import pmap_path
 from Library.Config import paths, apply_config
+
+
 
 
 def render_job(job):
@@ -161,7 +166,9 @@ def main():
                     job = {
                         "fits_path": row.fits_path,
                         "mask_path": row.mask_path,
-                        "pmap_path": pmap_path(row, model.architecture_id, model.date_range_id),
+                        "pmap_path": pmap_path(
+                            row, model.architecture_id, model.date_range_id
+                        ),
                         "pmap": pmap,
                         "postprocessing": postprocessing,
                         "arch_id": model.architecture_id,
