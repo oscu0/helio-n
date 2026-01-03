@@ -19,6 +19,6 @@
         "apply_batch_size": 256,
         "max_inflight_plots": 768,
         "plot_threads": 56,
-        "chunk_size": 32
+        "chunk_size": 8
     }
 }
