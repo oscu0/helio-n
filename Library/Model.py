@@ -254,7 +254,7 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     model.fit(
         train_gen,
         epochs=model_params["num_epochs"],
-        steps_per_epoch=steps_per_epoch,
+        # steps_per_epoch=steps_per_epoch,
         validation_data=val_gen,
         validation_steps=val_steps,
         callbacks=callbacks,
