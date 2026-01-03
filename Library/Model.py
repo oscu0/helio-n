@@ -36,6 +36,83 @@ def augment_pair(img, mask):
     return img, mask
 
 
+def _load_pair_np(fits_path, mask_path, model_params):
+    """Deterministic preprocessing for one FITS/mask pair (no augmentation)."""
+    if isinstance(fits_path, (bytes, np.bytes_)):
+        fits_path = fits_path.decode("utf-8")
+    if isinstance(mask_path, (bytes, np.bytes_)):
+        mask_path = mask_path.decode("utf-8")
+
+    img = np.asarray(IO.prepare_fits(fits_path), dtype=np.float32)
+    mask = np.asarray(IO.prepare_mask(mask_path), dtype=np.float32)
+
+    img_resized = IO.resize_for_model(img, model_params["img_size"])
+    mask_resized = PIL.Image.fromarray((mask * 255).astype(np.uint8)).resize(
+        (model_params["img_size"], model_params["img_size"]),
+        resample=PIL.Image.NEAREST,
+    )
+
+    img = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=-1)
+    mask = np.expand_dims(np.array(mask_resized, dtype=np.float32) / 255.0, axis=-1)
+    mask = (mask > 0.5).astype(np.float32)
+    return img, mask
+
+
+def _augment_tf(img, mask):
+    """Augmentation after cache: TF ops for flip + brightness."""
+
+    def _flip():
+        return tf.reverse(img, axis=[1]), tf.reverse(mask, axis=[1])
+
+    flip_cond = tf.random.uniform([]) < 0.5
+    img, mask = tf.cond(flip_cond, _flip, lambda: (img, mask))
+
+    scale = tf.random.uniform([], 0.9, 1.1)
+    img = tf.clip_by_value(img * scale, 0.0, 1.0)
+
+    img.set_shape(mask.shape)
+    return img, mask
+
+
+def make_dataset(fits_paths, mask_paths, model_params, augment=False, cache=True):
+    """
+    Build tf.data dataset with deterministic preprocessing cached before augmentation.
+    cache: True (in-memory), False, or filename for on-disk cache.
+    """
+    img_size = model_params["img_size"]
+    batch_size = model_params["batch_size"]
+    total = len(fits_paths)
+
+    ds = tf.data.Dataset.from_tensor_slices((fits_paths, mask_paths))
+
+    def _preprocess(f_path, m_path):
+        img, mask = tf.numpy_function(
+            lambda f, m: _load_pair_np(f, m, model_params),
+            [f_path, m_path],
+            [tf.float32, tf.float32],
+        )
+        img = tf.ensure_shape(img, (img_size, img_size, 1))
+        mask = tf.ensure_shape(mask, (img_size, img_size, 1))
+        return img, mask
+
+    ds = ds.map(_preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+
+    if cache:
+        if isinstance(cache, (str, os.PathLike)):
+            ds = ds.cache(cache)
+        else:
+            ds = ds.cache()
+
+    if augment:
+        buffer_size = min(total, 1024)
+        ds = ds.shuffle(buffer_size=buffer_size, reshuffle_each_iteration=True)
+        ds = ds.map(_augment_tf, num_parallel_calls=tf.data.AUTOTUNE)
+
+    ds = ds.batch(batch_size, drop_remainder=False)
+    ds = ds.prefetch(tf.data.AUTOTUNE)
+    return ds
+
+
 def load_pair(fits_path, mask_path, model_params):
     # decode paths if coming in as bytes
     if isinstance(fits_path, (bytes, np.bytes_)):
@@ -203,30 +280,20 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     train_fits = train_fits[::keep_every]
     train_masks = train_masks[::keep_every]
 
-    if model_params["correct_steps_by_n"]:
-        # steps per epoch (integer)
-        n_train_eff = len(train_fits)
-        n_val_eff = len(val_fits)
-
-        steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
-        val_steps = max(1, n_val_eff // model_params["batch_size"])
-
-    else:
-        steps_per_epoch = max(1, n_train // model_params["batch_size"])
-        val_steps = max(1, n_val // model_params["batch_size"])
-
-    train_gen = pair_generator(
+    train_ds = make_dataset(
         train_fits,
         train_masks,
+        model_params,
         augment=True,
-        model_params=model_params,
+        cache=True,
     )
 
-    val_gen = pair_generator(
+    val_ds = make_dataset(
         val_fits,
         val_masks,
+        model_params,
         augment=False,
-        model_params=model_params,
+        cache=True,
     )
 
     model = build_unet(model_params=model_params)
@@ -260,11 +327,9 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     ]
 
     model.fit(
-        train_gen,
+        train_ds,
         epochs=model_params["num_epochs"],
-        # steps_per_epoch=steps_per_epoch,
-        validation_data=val_gen,
-        validation_steps=val_steps,
+        validation_data=val_ds,
         callbacks=callbacks,
     )
 
