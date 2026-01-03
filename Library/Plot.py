@@ -11,7 +11,15 @@ from PIL import Image
 
 
 from .Processing import *
-from .IO import prepare_fits, prepare_pmap, prepare_mask, pmap_path
+from .IO import (
+    prepare_fits,
+    prepare_pmap,
+    prepare_mask,
+    pmap_path,
+    base_output_stem,
+    plot_path,
+    unet_mask_path,
+)
 from .Metrics import generate_omask
 
 
@@ -211,15 +219,8 @@ def save_ch_map_unet(
     architecture_id = arch_id if arch_id is not None else model.architecture_id
     date_range_id = date_id if date_id is not None else model.date_range_id
 
-    base = row.mask_path.replace("_FINAL", "")
-    token = "CH_MASK"
-    idx = base.find(token)
-    if idx != -1:
-        base = base[:idx]
-    # strip any existing extension
-    if base.lower().endswith(".png"):
-        base = base[:-4]
-    out_path = base + "CH_" + architecture_id + date_range_id + postprocessing + ".png"
+    base = base_output_stem(row.mask_path)
+    out_path = plot_path(base, architecture_id, date_range_id, postprocessing)
 
     # Save the correct figure at exact size; no resizing step needed
     fig.savefig(out_path, dpi=DPI, bbox_inches=None, pad_inches=0)
@@ -309,20 +310,12 @@ def save_ch_mask_only_unet(
     arch_id=None,
     date_id=None,
 ):
-    base = row.mask_path.replace("_FINAL", "")
-    token = "CH_MASK"
-    idx = base.find(token)
-    if idx != -1:
-        base = base[:idx]
-    if base.lower().endswith(".png"):
-        base = base[:-4]
-    out_path = (
-        base
-        + "CH_MASK_"
-        + (arch_id if arch_id is not None else model.architecture_id)
-        + (date_id if date_id is not None else model.date_range_id)
-        + postprocessing
-        + ".png"
+    base = base_output_stem(row.mask_path)
+    out_path = unet_mask_path(
+        base,
+        arch_id if arch_id is not None else model.architecture_id,
+        date_id if date_id is not None else model.date_range_id,
+        postprocessing,
     )
 
     if fast:

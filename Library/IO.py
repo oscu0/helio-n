@@ -269,12 +269,32 @@ def prepare_dataset(
 
 
 def pmap_path(row, architecture_id, date_range_id):
-    base = row.mask_path.replace("_FINAL", "")
-    token = "CH_MASK"
-    idx = base.find(token)
-    if idx != -1:
-        base = base[:idx]
-    # Ensure no double extensions
-    if base.lower().endswith(".png"):
-        base = base[:-4]
-    return base + token + "_" + architecture_id + date_range_id + "PX.npy"
+    base = base_output_stem(row.mask_path)
+    return f"{base}CH_MASK_{architecture_id}{date_range_id}PX.npy"
+
+
+def plot_path(base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str) -> str:
+    """Build CH plot path from base stem (no CH_MASK suffix or extension)."""
+    return f"{base_stem}CH_{architecture_id}{date_range_id}{postprocessing}.png"
+
+
+def unet_mask_path(base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str) -> str:
+    """Build UNet CH mask path from base stem (no CH_MASK suffix or extension)."""
+    return f"{base_stem}CH_MASK_{architecture_id}{date_range_id}{postprocessing}.png"
+
+
+def base_output_stem(mask_path: str) -> str:
+    """
+    Given a mask path (endswith CH_MASK.png or CH_MASK_FINAL.png), return the stem to which
+    architecture/date/postprocessing suffixes can be appended. Ensures no double extensions/suffixes.
+    Example: /.../AIA20160801_010005_0193_CH_MASK_FINAL.png -> /.../AIA20160801_010005_0193_
+    """
+    base = mask_path
+    if base.endswith("_FINAL.png"):
+        base = base[: -len("_FINAL.png")]
+    elif base.endswith(".png"):
+        base = base[: -len(".png")]
+    # Trim trailing CH_MASK if present
+    if base.endswith("CH_MASK"):
+        base = base[: -len("CH_MASK")]
+    return base
