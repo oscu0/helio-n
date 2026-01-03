@@ -146,6 +146,19 @@ def main():
                     ).numpy()
                 resize_time = time.perf_counter() - resize_start
 
+                # Pad final partial batch to full size to avoid new XLA shapes
+                if x.shape[0] < batch_size:
+                    pad = batch_size - x.shape[0]
+                    x = np.pad(
+                        x,
+                        ((0, pad), (0, 0), (0, 0), (0, 0)),
+                        mode="constant",
+                    )
+                    valid_rows += [None] * pad  # placeholders to keep alignment
+                    probs_mask = [1] * (batch_size - pad) + [0] * pad
+                else:
+                    probs_mask = [1] * batch_size
+
                 infer_start = time.perf_counter()
                 try:
                     probs = model.compiled_infer(x)
@@ -160,7 +173,9 @@ def main():
 
                 submit_start = time.perf_counter()
                 wait_time = 0.0
-                for row, prob in zip(valid_rows, probs):
+                for row, prob, keep in zip(valid_rows, probs, probs_mask):
+                    if keep == 0 or row is None:
+                        continue
                     pmap = prob[..., 0]
                     save_pmap(model, row, pmap)
                     job = {
