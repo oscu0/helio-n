@@ -46,6 +46,8 @@ def plot_ch_map(
     set_title=False,
     base_map=None,
     base=None,
+    arch_id=None,
+    date_id=None,
 ):
     if oval is None:
         oval = generate_omask(row)
@@ -57,6 +59,8 @@ def plot_ch_map(
             else get_postprocessing_params(postprocessing)
         )
         if pmap is None:
+            if model is None:
+                raise ValueError("model required when pmap is None for source='unet'")
             pmap = find_or_make_pmap(row, model)
         mask = pmap_to_mask(pmap, smoothing_params)
         title = "helio-n (U-Net)"
@@ -80,6 +84,8 @@ def plot_ch_map(
             set_title=set_title,
             base_map=base_map,
             title=title,
+            arch_id=arch_id,
+            date_id=date_id,
         )
     else:
         fig, ax = base
@@ -113,6 +119,8 @@ def plot_ch_base(
     set_title=False,
     base_map=None,
     title="",
+    arch_id=None,
+    date_id=None,
 ):
     """
     Draw the base CH plot (background + grid) without contours.
@@ -182,6 +190,7 @@ def save_ch_map_unet(
     base_map=None,
     arch_id=None,
     date_id=None,
+    base=None,
 ):
     fig, ax = plot_ch_map(
         row,
@@ -192,6 +201,9 @@ def save_ch_map_unet(
         oval=oval,
         set_title=False,
         base_map=base_map,
+        base=base,
+        arch_id=arch_id,
+        date_id=date_id,
     )
 
     architecture_id = arch_id if arch_id is not None else model.architecture_id
@@ -235,6 +247,8 @@ def plot_ch_mask_only(
         )
 
         if pmap is None:
+            if model is None:
+                raise ValueError("model required when pmap is None for source='unet'")
             pmap = find_or_make_pmap(row, model)
 
         mask = pmap_to_mask(pmap, smoothing_params)

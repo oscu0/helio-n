@@ -45,7 +45,7 @@ def main():
     batch_size = apply_config["batch_size"]
     plot_workers = apply_config["plot_threads"]
     max_inflight_plots = apply_config["max_inflight_plots"]
-    target_size = model.architecture.get("img_size", 256)
+    target_size = model.architecture["img_size"]
 
     rows = list(df.itertuples())
     pmap_paths = []
