@@ -47,17 +47,20 @@ def load_pair(fits_path, mask_path, model_params):
     img = np.asarray(IO.prepare_fits(fits_path), dtype=np.float32)
     mask = np.asarray(IO.prepare_mask(mask_path), dtype=np.float32)
 
-    # resize
-    img_resized = PIL.Image.fromarray((img * 255).astype(np.uint8)).resize(
-        (model_params["img_size"], model_params["img_size"]),
-        resample=PIL.Image.BILINEAR,
-    )
-    mask_resized = PIL.Image.fromarray((mask * 255).astype(np.uint8)).resize(
-        (model_params["img_size"], model_params["img_size"]), resample=PIL.Image.NEAREST
-    )
+    if model_params["avoid_requantization"]:
+        # resize without quantizing the normalized FITS to 8-bit
+        img_resized = IO.resize_for_model(img, model_params["img_size"])
+        mask_resized = PIL.Image.fromarray((mask * 255).astype(np.uint8)).resize(
+            (model_params["img_size"], model_params["img_size"]), resample=PIL.Image.NEAREST
+        )
+    else:
+        img_resized = IO.resize_for_model(img, model_params["img_size"])
+        mask_resized = PIL.Image.fromarray((mask * 255).astype(np.uint8)).resize(
+            (model_params["img_size"], model_params["img_size"]), resample=PIL.Image.NEAREST
+        )
 
-    # normalize back to [0,1] and add channel axis
-    img = np.expand_dims(np.array(img_resized, dtype=np.float32) / 255.0, axis=-1)
+    # add channel axis; mask stays binary after resize
+    img = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=-1)
     mask = np.expand_dims(np.array(mask_resized, dtype=np.float32) / 255.0, axis=-1)
     mask = (mask > 0.5).astype(np.float32)
 
