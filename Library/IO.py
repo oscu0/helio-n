@@ -269,7 +269,12 @@ def prepare_dataset(
 
 
 def pmap_path(row, architecture_id, date_range_id):
-    return row.mask_path.replace("_FINAL", "").replace(
-        "CH_MASK.png",
-        "CH_MASK_" + architecture_id + date_range_id + "PX" + ".npy",
-    )
+    base = row.mask_path.replace("_FINAL", "")
+    token = "CH_MASK"
+    idx = base.find(token)
+    if idx != -1:
+        base = base[:idx]
+    # Ensure no double extensions
+    if base.lower().endswith(".png"):
+        base = base[:-4]
+    return base + token + "_" + architecture_id + date_range_id + "PX.npy"

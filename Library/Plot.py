@@ -211,10 +211,15 @@ def save_ch_map_unet(
     architecture_id = arch_id if arch_id is not None else model.architecture_id
     date_range_id = date_id if date_id is not None else model.date_range_id
 
-    out_path = row.mask_path.replace("_FINAL", "").replace(
-        "CH_MASK",
-        "CH_" + architecture_id + date_range_id + postprocessing,
-    )
+    base = row.mask_path.replace("_FINAL", "")
+    token = "CH_MASK"
+    idx = base.find(token)
+    if idx != -1:
+        base = base[:idx]
+    # strip any existing extension
+    if base.lower().endswith(".png"):
+        base = base[:-4]
+    out_path = base + "CH_" + architecture_id + date_range_id + postprocessing + ".png"
 
     # Save the correct figure at exact size; no resizing step needed
     fig.savefig(out_path, dpi=DPI, bbox_inches=None, pad_inches=0)
@@ -304,12 +309,20 @@ def save_ch_mask_only_unet(
     arch_id=None,
     date_id=None,
 ):
-    out_path = row.mask_path.replace("_FINAL", "").replace(
-        "CH_MASK",
-        "CH_MASK_"
+    base = row.mask_path.replace("_FINAL", "")
+    token = "CH_MASK"
+    idx = base.find(token)
+    if idx != -1:
+        base = base[:idx]
+    if base.lower().endswith(".png"):
+        base = base[:-4]
+    out_path = (
+        base
+        + "CH_MASK_"
         + (arch_id if arch_id is not None else model.architecture_id)
         + (date_id if date_id is not None else model.date_range_id)
-        + postprocessing,
+        + postprocessing
+        + ".png"
     )
 
     if fast:

@@ -35,7 +35,7 @@ def render_job(job):
         oval = job.get("oval")
         if oval is None:
             oval = generate_omask(row)
-
+            
         save_ch_map_unet(
             row,
             None,
