@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 import os
+
+# Python warnings
 os.environ["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 0=all, 1=INFO-, 2=WARNING-, 3=ERROR-
+# TensorFlow / XLA C++ logging
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # hide INFO/WARNING/ERROR
+os.environ["ABSL_MIN_LOG_LEVEL"] = "3"     # silence absl logging
+
+os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
 import sys
 import time
