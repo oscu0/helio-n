@@ -258,9 +258,9 @@ def prepare_dataset(
     # skip 120sec fits that are occasionally present
     if hourly:
         # extract hour key: YYYYMMDD_HH
-        df["hour"] = df.index.str.slice(0, 11)
+        matches["hour"] = matches.index.str.slice(0, 11)
 
-        df = df.drop_duplicates(subset="hour", keep="first").drop(columns="hour")
+        matches = matches.drop_duplicates(subset="hour", keep="first").drop(columns="hour")
 
     # Save matches to parquet (if desired)
     matches.to_parquet(out_parquet)
@@ -363,5 +363,7 @@ def synoptic_dataset(df):
     df_mini = df.loc[keep].sort_index().copy()
 
     df_mini.index = df_mini.index.map(round_index)
+
+    df_mini.to_parquet(paths["artifact_root"] + "Paths (Synoptic).parquet")
 
     return df_mini
