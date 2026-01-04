@@ -45,6 +45,8 @@ def render_job(job):
     try:
         base_map = sunpy.map.Map(row.fits_path)
         oval = job.get("oval") or generate_omask(row)
+        # Save pmap in worker to avoid main-process IO stalls
+        np.save(job["pmap_path"], job["pmap"])
 
         save_ch_map_unet(
             row,
@@ -99,7 +101,9 @@ def main():
     batch_size = apply_config["batch_size"]
     chunk_size = apply_config["chunk_size"]
     plot_workers = apply_config["plot_threads"]
-    max_inflight_plots = apply_config["max_inflight_plots"] / chunk_size
+
+    # Just in case we try masssive chunks
+    max_inflight_plots = max(1, apply_config["max_inflight_plots"] // chunk_size)
     target_size = model.architecture["img_size"]
 
 
@@ -183,15 +187,15 @@ def main():
                         )
                         pbar.update(len(batch_rows))
                         continue
-                    infer_time += time.perf_counter() - infer_start
-                    total_infer_time += infer_time
+                    chunk_infer = time.perf_counter() - infer_start
+                    infer_time += chunk_infer
+                    total_infer_time += chunk_infer
 
                     submit_start = time.perf_counter()
                     for row, prob, keep in zip(chunk_rows, probs, mask_keep):
                         if keep == 0 or row is None:
                             continue
                         pmap = prob[..., 0]
-                        save_pmap(model, row, pmap)
                         job = {
                             "fits_path": row.fits_path,
                             "mask_path": row.mask_path,
