@@ -20,5 +20,16 @@
         "max_inflight_plots": 768,
         "plot_threads": 56,
         "chunk_size": 8
+    },
+    "miracle_mini": {
+        "fits_root": "/mnt/sun/sdo/aia/L0/0193/",
+        "masks_root": "/mnt/sun/sdo/helio-n/masks/chsun/0193/",
+        "hmi_root": "/mnt/sun/sdo/hmi/fits/",
+        "artifact_root": "./Outputs/Artifacts/miracle_mini/",
+        "train_batch_size": 64,
+        "apply_batch_size": 256,
+        "max_inflight_plots": 768,
+        "plot_threads": 56,
+        "chunk_size": 8
     }
 }
