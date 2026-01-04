@@ -39,5 +39,5 @@ Model.train_model(
     train_df,
     keep_every=date_range["keep_every"],
     model_params=architecture,
-    path=BASE_DIR + "Outputs/Models" + (architecture_id + date_range_id) + ".keras",
+    path=BASE_DIR + "Outputs/Models/" + (architecture_id + date_range_id) + ".keras",
 )
