@@ -14,6 +14,16 @@ with open(SCRIPT_DIR / "../Config/Machine.json", "r") as f:
     key = override_machine if override_machine else hostname
     machine_config = machines.get(key, next(iter(machines.values())))
 
+    # Support simple inheritance for non-path settings
+    if isinstance(machine_config, dict) and "inherits" in machine_config:
+        base_key = machine_config["inherits"]
+        base_config = machines.get(base_key, {})
+        child = {k: v for k, v in machine_config.items() if k != "inherits"}
+        merged = dict(child)
+        for k, v in base_config.items():
+            merged.setdefault(k, v)
+        machine_config = merged
+
 paths = {
     "fits_root": machine_config["fits_root"],
     "masks_root": machine_config["masks_root"],
