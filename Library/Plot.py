@@ -50,7 +50,7 @@ def plot_ch_map(
     postprocessing="P0",
     oval=None,
     show_fits=True,
-    ax=None,
+    multiplot_ax=None,
     set_title=False,
     map_obj=None,
     arch_id=None,
@@ -87,7 +87,7 @@ def plot_ch_map(
         mask,
         oval,
         show_fits=show_fits,
-        ax=ax,
+        multiplot_ax=multiplot_ax,
         set_title=set_title,
         map_obj=map_obj,
         title=title,
@@ -121,7 +121,7 @@ def plot_ch_base(
     mask,
     oval,
     show_fits=True,
-    ax=None,
+    multiplot_ax=None,
     set_title=False,
     map_obj=None,
     title="",
@@ -134,20 +134,21 @@ def plot_ch_base(
     Returns (fig, ax) ready for overlay contours.
     """
     FIGSIZE_IN = (TARGET_PX / DPI, TARGET_PX / DPI)
+
+    m = map_obj if map_obj is not None else sunpy.map.Map(row.fits_path)
+
     if base_fig_ax is not None:
         fig, ax = base_fig_ax
-        m = map_obj if map_obj is not None else sunpy.map.Map(row.fits_path)
         created_fig = False
     else:
-        m = map_obj if map_obj is not None else sunpy.map.Map(row.fits_path)
-
         created_fig = False
-        if ax is None:
+        if multiplot_ax is None:
             fig = plt.figure(figsize=FIGSIZE_IN, dpi=DPI)
             fig.set_constrained_layout(False)
             ax = fig.add_axes([0, 0, 1, 1], projection=m)
             created_fig = True
         else:
+            ax = multiplot_ax
             fig = ax.figure  # embed into existing figure
 
     if show_fits:
