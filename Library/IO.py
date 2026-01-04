@@ -114,7 +114,7 @@ def prepare_dataset(
     hmi_root=None,
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
-    hourly=True
+    hourly=True,
 ):
 
     def index(p):
@@ -278,12 +278,16 @@ def pmap_path(row, architecture_id, date_range_id):
     return f"{base}CH_MASK_{architecture_id}{date_range_id}PX.npy"
 
 
-def plot_path(base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str) -> str:
+def plot_path(
+    base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str
+) -> str:
     """Build CH plot path from base stem (no CH_MASK suffix or extension)."""
     return f"{base_stem}CH_{architecture_id}{date_range_id}{postprocessing}.png"
 
 
-def unet_mask_path(base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str) -> str:
+def unet_mask_path(
+    base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str
+) -> str:
     """Build UNet CH mask path from base stem (no CH_MASK suffix or extension)."""
     return f"{base_stem}CH_MASK_{architecture_id}{date_range_id}{postprocessing}.png"
 
@@ -303,3 +307,61 @@ def base_output_stem(mask_path: str) -> str:
     if base.endswith("CH_MASK"):
         base = base[: -len("CH_MASK")]
     return base
+
+
+def synoptic_dataset(df):
+    def hrmin(x):
+        return int(x[-4:])
+
+    def round_time(x):
+        stub = hrmin(x)
+        if stub >= 300 and stub < 900:
+            x = "0600"
+        elif stub >= 900 and stub < 1500:
+            x = "1200"
+        elif stub >= 1500 and stub < 2100:
+            x = "1800"
+        else:
+            x = "0000"
+        return x
+
+    def round_index(x):
+        return x[:8] + "_" + round_time(x)
+
+        # df index is like "YYYYMMDD_HHMM"
+
+    idx = df.index.astype(str)
+
+    day = idx.str.slice(0, 8)  # YYYYMMDD
+    hh = idx.str.slice(9, 11).astype(int)  # HH
+    mm = idx.str.slice(11, 13).astype(int)  # MM
+
+    tmin = hh * 60 + mm  # minutes since midnight
+
+    targets = np.array([0, 6 * 60, 12 * 60, 18 * 60])  # 00,06,12,18 in minutes
+
+    # distance on a circle (day wraps): min(|t-target|, 1440-|t-target|)
+    diff = np.abs(tmin.to_numpy()[:, None] - targets[None, :])
+    circ = np.minimum(diff, 1440 - diff)
+
+    tmp = df.copy()
+    tmp["_day"] = day.to_numpy()
+    tmp["_tmin"] = tmin.to_numpy()
+
+    keep_idx = []
+    for k, target in enumerate(targets):
+        # pick the closest row per day to this target (wrap-aware)
+        d = circ[:, k]
+        sub = tmp.assign(_d=d)
+        best = (
+            sub.sort_values(["_day", "_d", "_tmin"]).groupby("_day", sort=False).head(1)
+        )
+        keep_idx.append(best.index)
+
+    keep = keep_idx[0].union(keep_idx[1]).union(keep_idx[2]).union(keep_idx[3])
+
+    df_mini = df.loc[keep].sort_index().copy()
+
+    df_mini.index = df_mini.index.map(round_index)
+
+    return df_mini
