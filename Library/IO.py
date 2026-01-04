@@ -114,6 +114,7 @@ def prepare_dataset(
     hmi_root=None,
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
+    hourly=True
 ):
 
     def index(p):
@@ -254,11 +255,15 @@ def prepare_dataset(
             # if writing fails (e.g. empty), ignore
             pass
 
+    # skip 120sec fits that are occasionally present
+    if hourly:
+        # extract hour key: YYYYMMDD_HH
+        df["hour"] = df.index.str.slice(0, 11)
+
+        df = df.drop_duplicates(subset="hour", keep="first").drop(columns="hour")
+
     # Save matches to parquet (if desired)
-    try:
-        matches.to_parquet(out_parquet)
-    except Exception:
-        pass
+    matches.to_parquet(out_parquet)
 
     # Return core results
     return matches, {
