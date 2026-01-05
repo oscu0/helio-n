@@ -40,19 +40,18 @@ from Library.Config import paths, apply_config
 
 
 def render_job(job):
-    """Worker: generates all plots for a single pmap; no TF usage."""
+    """Worker: generates all plots for a single pmap on disk; no TF usage."""
     row = SimpleNamespace(fits_path=job["fits_path"], mask_path=job["mask_path"])
     try:
+        pmap = np.load(job["pmap_path"])
         base_map = sunpy.map.Map(row.fits_path)
         oval = job.get("oval") or generate_omask(row)
-        # Save pmap in worker to avoid main-process IO stalls
-        np.save(job["pmap_path"], job["pmap"])
 
         save_ch_map_unet(
             row,
             None,
             job["postprocessing"],
-            job["pmap"],
+            pmap,
             oval,
             base_map,
             arch_id=job["arch_id"],
@@ -62,7 +61,7 @@ def render_job(job):
             row,
             None,
             "P0",
-            job["pmap"],
+            pmap,
             oval,
             base_map,
             arch_id=job["arch_id"],
@@ -72,8 +71,10 @@ def render_job(job):
             row,
             None,
             job["postprocessing"],
-            job["pmap"],
+            pmap,
             True,
+            arch_id=job["arch_id"],
+            date_id=job["date_id"],
         )
         return job["pmap_path"]
     except Exception as e:
@@ -196,13 +197,11 @@ def main():
                         if keep == 0 or row is None:
                             continue
                         pmap = prob[..., 0]
+                        pmap_file, _ = save_pmap(model, row, pmap)
                         job = {
                             "fits_path": row.fits_path,
                             "mask_path": row.mask_path,
-                            "pmap_path": pmap_path(
-                                row, model.architecture_id, model.date_range_id
-                            ),
-                            "pmap": pmap,
+                            "pmap_path": pmap_file,
                             "postprocessing": postprocessing,
                             "arch_id": model.architecture_id,
                             "date_id": model.date_range_id,
