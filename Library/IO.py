@@ -126,7 +126,7 @@ def prepare_dataset(
     # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
     mask_files = glob.glob(
-        os.path.join(masks_root, "**", "*_CH_MASK*.png"), recursive=True
+        os.path.join(masks_root, "**", "*_CH_MASK_FINAL*.png"), recursive=True
     )
 
     df_fits = pd.DataFrame(
@@ -299,13 +299,17 @@ def base_output_stem(mask_path: str) -> str:
     Example: /.../AIA20160801_010005_0193_CH_MASK_FINAL.png -> /.../AIA20160801_010005_0193_
     """
     base = mask_path
-    if base.endswith("_FINAL.png"):
-        base = base[: -len("_FINAL.png")]
-    elif base.endswith(".png"):
+    if base.endswith(".png"):
         base = base[: -len(".png")]
-    # Trim trailing CH_MASK if present
-    if base.endswith("CH_MASK"):
-        base = base[: -len("CH_MASK")]
+
+    # Trim trailing CH_MASK and any appended suffix (e.g., CH_MASK_FINAL, CH_MASK_A1D1P1)
+    if "CH_MASK" in base:
+        base = base[: base.rfind("CH_MASK")]
+
+    # Expect _FINAL in the original filename; leave a trailing underscore as before
+    if not mask_path.endswith("_FINAL.png"):
+        raise ValueError(f"Mask filename missing _FINAL: {mask_path}")
+
     return base
 
 
