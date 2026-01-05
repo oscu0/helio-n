@@ -47,17 +47,16 @@ def load_pair(fits_path, mask_path, model_params):
     img = np.asarray(img, dtype=np.float32)
     mask = np.asarray(IO.prepare_mask(mask_path), dtype=np.float32)
 
-    if model_params["avoid_requantization"]:
-        # resize without quantizing the normalized FITS to 8-bit
-        img_resized = IO.resize_for_model(img, model_params["img_size"])
-    else:
-        img_u8 = (img * 255).astype(np.uint8)
-        img_resized = (
-            PIL.Image.fromarray(img_u8)
-            .resize((model_params["img_size"], model_params["img_size"]), resample=PIL.Image.BILINEAR)
-            .convert("F")
+    img_u8 = (img * 255).astype(np.uint8)
+    img_resized = (
+        PIL.Image.fromarray(img_u8)
+        .resize(
+            (model_params["img_size"], model_params["img_size"]),
+            resample=PIL.Image.BILINEAR,
         )
-        img_resized = np.array(img_resized, dtype=np.float32) / 255.0
+        .convert("F")
+    )
+    img_resized = np.array(img_resized, dtype=np.float32) / 255.0
 
     mask_resized = PIL.Image.fromarray((mask * 255).astype(np.uint8)).resize(
         (model_params["img_size"], model_params["img_size"]),
@@ -180,8 +179,13 @@ def bce_dice_loss(y_true, y_pred):
 
 
 def train_model(pairs_df, model_params, keep_every=3, path=None):
-    fits_paths = pairs_df["fits_path"].astype(str).tolist()
-    mask_paths = pairs_df["mask_path"].astype(str).tolist()
+    if model_params["shuffle_df"]:
+        pairs_df_shuffled = pairs_df.sample(frac=1)
+        fits_paths = pairs_df_shuffled["fits_path"].astype(str).tolist()
+        mask_paths = pairs_df_shuffled["mask_path"].astype(str).tolist()
+    else:
+        fits_paths = pairs_df["fits_path"].astype(str).tolist()
+        mask_paths = pairs_df["mask_path"].astype(str).tolist()
 
     if len(fits_paths) == 0:
         raise RuntimeError("pairs_df is empty: no FITS-mask pairs to train on.")
@@ -206,14 +210,23 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     train_fits = train_fits[::keep_every]
     train_masks = train_masks[::keep_every]
 
+    def steps(n):
+        global model_params
+        if model_params["ceil_based_steps_per_epoch"]:
+            return max(
+                1, (n + model_params["batch_size"] - 1) // model_params["batch_size"]
+            )
+        else:
+            return max(1, n // model_params["batch_size"])
+
     if model_params["correct_steps_by_n"]:
         n_train_eff = len(train_fits)
         n_val_eff = len(val_fits)
-        steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
-        val_steps = max(1, n_val_eff // model_params["batch_size"])
+        steps_per_epoch = steps(n_train_eff)
+        val_steps = steps(n_val_eff)
     else:
-        steps_per_epoch = max(1, n_train // model_params["batch_size"])
-        val_steps = max(1, n_val // model_params["batch_size"])
+        steps_per_epoch = steps(n_train)
+        val_steps = steps(n_val)
 
     train_gen = pair_generator(
         train_fits,
