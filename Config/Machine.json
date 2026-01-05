@@ -1,8 +1,8 @@
 {
     "risc1": {
-        "fits_root": "/Volumes/JetDrive 330/SDO Data/FITS/",
-        "masks_root": "/Volumes/JetDrive 330/SDO Data/Masks/",
-        "hmi_root": "/Volumes/JetDrive 330/SDO Data/HMI/",
+        "fits_root": "/Volumes/JetDrive 330/mnt~sun/FITS/",
+        "masks_root": "/Volumes/JetDrive 330/mnt~sun/Masks/",
+        "hmi_root": "/Volumes/JetDrive 330/mnt~sun/HMI/",
         "artifact_root": "./Outputs/Artifacts/risc1/",
         "train_batch_size": 16,
         "apply_batch_size": 32,
