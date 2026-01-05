@@ -328,7 +328,6 @@ def save_ch_mask_only_unet(
         if pmap is None:
             pmap = find_or_make_pmap(row, model)
         mask = pmap_to_mask(pmap, smoothing_params)
-        mask = np.flipud(mask)
         mask_u8 = (mask > 0.5).astype(np.uint8) * 255
         img = PIL.Image.fromarray(mask_u8, mode="L")
         if img.size != (TARGET_PX, TARGET_PX):
