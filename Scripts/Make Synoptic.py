@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import socket
 from pathlib import Path
 
 import Library.IO as IO
@@ -72,20 +73,32 @@ def main():
     try:
         direction = sys.argv[1].lower()
     except IndexError:
-        print('Pass "up" or "down" as the first argument.')
+        print('Pass "up", "down", or "inplace" as the first argument.')
         sys.exit(1)
 
-    if direction not in {"up", "down"}:
-        print('Direction must be "up" or "down".')
+    if direction not in {"up", "down", "inplace"}:
+        print('Direction must be "up", "down", or "inplace".')
         sys.exit(1)
 
     configs = json.load(open(BASE_DIR + "Config/Machine.json"))
 
+    host = socket.gethostname()
+    artifact_root = configs.get(host, configs.get(list(configs.keys())[0])).get(
+        "artifact_root", f"./Outputs/Artifacts/{host}/"
+    )
+
+    # Only miracle <-> miracle_mini make sense for copy modes
     roots = {
         "fits": [configs["miracle"]["fits_root"], configs["miracle_mini"]["fits_root"]],
         "mask": [configs["miracle"]["masks_root"], configs["miracle_mini"]["masks_root"]],
         "hmi": [configs["miracle"]["hmi_root"], configs["miracle_mini"]["hmi_root"]],
     }
+
+    if direction == "inplace":
+        df = IO.synoptic_dataset(
+            pd.read_parquet(Path(artifact_root) / "Paths.parquet")
+        )
+        return
 
     root_summary = {
         k: {
@@ -102,10 +115,10 @@ def main():
         for kind, paths in root_summary.items():
             print(f"{kind}: {paths['src']} -> {paths['dst']}")
             copy_root_tree(paths["src"], paths["dst"])
-        return
+            return
 
     df = IO.synoptic_dataset(
-        pd.read_parquet(BASE_DIR + "Outputs/Artifacts/miracle/Paths.parquet")
+        pd.read_parquet(Path(artifact_root) / "Paths.parquet")
     )
 
     df_new = df.copy()
