@@ -329,27 +329,27 @@ def abs_area(mask, omask):
     m = np.asarray(mask) > 0.5
 
     # restrict to oval
-    region = np.asarray(omask, dtype=bool)
+    if omask is not None:
+        region = np.asarray(omask, dtype=bool)
+        m = np.logical_and(m, region)
 
     # count CH pixels inside oval
-    return np.logical_and(m, region).sum()
-
-
-def rel_area(mask, omask):
-    return abs_area(mask, omask) / omask.sum()
+    return m.sum()
 
 
 def stats(
-    row,
+    row=None,
     smoothing_params=Processing.get_postprocessing_params("P0"),
+    m1=None,
     m2=None,
     model=None,
     oval=None,
 ):
-    if oval is None:
-        oval = generate_omask(row)
+    # if oval is None:
+    #     oval = generate_omask(row)
 
-    m1 = prepare_mask(row.mask_path)
+    if m1 is None:
+        m1 = prepare_mask(row.mask_path)
     if m2 is None:
         pmap = Processing.find_or_make_pmap(row, model)
 
