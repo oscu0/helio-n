@@ -82,6 +82,13 @@ def render_job(job):
 
 
 def main():
+    if len(sys.argv) < 6:
+        print(
+            "Usage: python Scripts/Apply.py <architecture_id> <date_range_id> <postprocessing> <start> <end>"
+        )
+        print("Example: python Scripts/Apply.py A2 D1 P1 20170601 20170701")
+        return
+
     architecture = sys.argv[1]
     date_range = sys.argv[2]
     postprocessing = sys.argv[3]

@@ -25,12 +25,13 @@ This repo contains a small set of scripts to prepare data, train the U-Net, run 
 Build the dataset parquet from raw FITS/masks/HMI roots.
 
 ```bash
-python Scripts/Make.py [hourly]
+python Scripts/Make.py Dataset [hourly]
 ```
 
 - Uses roots from `Config/Machine.json`.
-- Default `hourly=True` keeps one sample per hour per day; set `hourly=False` to keep all matches.
+- Default is `hourly=False` (keep all matches). Pass `hourly` to keep one sample per hour per day.
 - Writes `Outputs/Artifacts/<host>/Paths.parquet` plus helper CSVs for missing data.
+- Run `python Scripts/Make.py` to list available Make scripts.
 
 ## Training
 ```bash
@@ -56,12 +57,21 @@ python Scripts/Apply.py <architecture_id> <date_range_id> <postprocessing> <star
   - `.npy` pmaps via `Library.IO.pmap_path` (co-located with masks)
   - CH overlay PNGs and mask-only PNGs for requested and baseline `P0` postprocessing
 
+## Stats
+```bash
+python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic]
+```
+
+- Example: `python Scripts/Make.py Stats A1 D1 P1`
+- Add `synoptic` to read `Paths (Synoptic).parquet` instead of `Paths.parquet`.
+- Writes `Outputs/Artifacts/<host>/Stats/<architecture><date_range><postprocessing>_stats.parquet`.
+
 ## Synoptic copy helper
 Sync FITS/masks/HMI trees between the main and “mini” hosts.
 
 ```bash
-python "Scripts/Make Synoptic.py" up    # copy miracle -> miracle_mini
-python "Scripts/Make Synoptic.py" down  # copy miracle_mini -> miracle (rsync entire roots)
+python Scripts/Make.py Synoptic up    # copy miracle -> miracle_mini
+python Scripts/Make.py Synoptic down  # copy miracle_mini -> miracle (rsync entire roots)
 ```
 
 - Relies on `miracle` and `miracle_mini` entries in `Config/Machine.json`.
@@ -71,4 +81,4 @@ python "Scripts/Make Synoptic.py" down  # copy miracle_mini -> miracle (rsync en
 ## Notes
 - TF/XLA logging is suppressed in scripts; GPU growth is enabled in Apply.
 - `Library/Config.py` auto-selects the host section from `Machine.json` and exposes `paths`, `apply_config`, and `train_batch_size` to scripts.
-- Run scripts from repo root (`python -m Scripts.Apply etc`) so relative paths resolve.
+- Run `python -m Scripts` to list available commands.

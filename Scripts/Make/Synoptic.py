@@ -4,10 +4,13 @@ import sys
 import socket
 from pathlib import Path
 
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(ROOT_DIR))
+
 import Library.IO as IO
 import pandas as pd
 
-BASE_DIR = str(Path(__file__).resolve().parent.parent) + "/"
+BASE_DIR = str(ROOT_DIR) + "/"
 
 
 def build_move_list(src_df, dst_df, kind):
@@ -73,11 +76,13 @@ def main():
     try:
         direction = sys.argv[1].lower()
     except IndexError:
-        print('Pass "up", "down", or "inplace" as the first argument.')
+        print('Usage: python Scripts/Make.py Synoptic <up|down|inplace>')
+        print('Example: python Scripts/Make.py Synoptic up')
         sys.exit(1)
 
     if direction not in {"up", "down", "inplace"}:
         print('Direction must be "up", "down", or "inplace".')
+        print('Example: python Scripts/Make.py Synoptic up')
         sys.exit(1)
 
     configs = json.load(open(BASE_DIR + "Config/Machine.json"))

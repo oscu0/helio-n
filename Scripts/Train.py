@@ -4,14 +4,13 @@ from pathlib import Path
 
 BASE_DIR = str(Path(__file__).resolve().parent.parent) + "/"
 
+if len(sys.argv) < 3:
+    print("Usage: python Scripts/Train.py <architecture_id> <date_range_id>")
+    print("Example: python Scripts/Train.py A2 D1")
+    sys.exit(1)
+
 architecture_id = sys.argv[1]
 date_range_id = sys.argv[2]
-
-if date_range_id is None or architecture_id is None:
-    print(
-        "Usage: ./Train.py <experiment>, where <experiment> is the name of a config in Config/Model/Date Range/"
-    )
-    sys.exit(1)
 
 from Library.Config import paths, train_batch_size
 

@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-sys.path.append("..")
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(ROOT_DIR))
 
 from Library.Config import apply_config, paths
 from Library.IO import pmap_path, prepare_mask
@@ -131,8 +132,9 @@ def build_output_path(architecture_id, date_range_id, postprocessing):
 def main(argv):
     if len(argv) not in (4, 5):
         print(
-            "Usage: python Scripts/Stats.py <architecture_id> <date_range_id> <postprocessing> [synoptic]"
+            "Usage: python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic]"
         )
+        print("Example: python Scripts/Make.py Stats A1 D1 P1")
         return 1
 
     architecture_id, date_range_id, postprocessing = argv[1:4]
