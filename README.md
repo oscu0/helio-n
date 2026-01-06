@@ -1,4 +1,5 @@
-# Helio-N Pipeline Guide
+# Helio-N \[/ˈhɛliən/\]
+https://www.youtube.com/watch?v=eGtwgYt_QnA&list=RDeGtwgYt_QnA
 
 This repo contains a small set of scripts to prepare data, train the U-Net, run inference, and shuttle artifacts between machines.
 
