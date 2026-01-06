@@ -96,6 +96,8 @@ def find_or_make_pmap(row, model):
     try:
         pmap = prepare_pmap(pmap_path(row, model.architecture_id, model.date_range_id))
     except FileNotFoundError:
+        print("PMAP not found, generating...")
         _, data = prepare_fits(row.fits_path)
         pmap = fits_to_pmap(model, data)
+        save_pmap(model, row, pmap)
     return pmap
