@@ -72,11 +72,13 @@ Sync FITS/masks/HMI trees between the main and “mini” hosts.
 ```bash
 python Scripts/Make.py Synoptic up    # copy miracle -> miracle_mini
 python Scripts/Make.py Synoptic down  # copy miracle_mini -> miracle (rsync entire roots)
+python Scripts/Make.py Synoptic inplace  # build synoptic subset only
 ```
 
 - Relies on `miracle` and `miracle_mini` entries in `Config/Machine.json`.
 - Uses rsync; creates missing destination directories.
 - In `up` mode, builds a synoptic subset (00/06/12/18) before copying.
+- In `inplace` mode, only builds `Paths (Synoptic).parquet` from `Paths.parquet`.
 
 ## Notes
 - TF/XLA logging is suppressed in scripts; GPU growth is enabled in Apply.
