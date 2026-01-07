@@ -211,7 +211,7 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     train_masks = train_masks[::keep_every]
 
     def steps(n):
-        global model_params
+        # global model_params
         if model_params["ceil_based_steps_per_epoch"]:
             return max(
                 1, (n + model_params["batch_size"] - 1) // model_params["batch_size"]
