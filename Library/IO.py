@@ -34,15 +34,24 @@ def prepare_fits(path, mask_disk=True, clip_low=1, clip_high=99):
     """
     map_obj = sunpy.map.Map(path)
     if mask_disk:
-        map_data = mask_fits(map_obj).data
+        map_data = mask_fits(map_obj)
+        if np.ma.isMaskedArray(map_data):
+            map_data = map_data.filled(np.nan)
     else:
         map_data = map_obj.data
     map_data = np.flipud(map_data)
 
-    low = np.percentile(map_data, clip_low)
-    high = np.percentile(map_data, clip_high)
-    map_data = np.clip(map_data, low, high)
-    map_data = (map_data - low) / (high - low + 1e-6)
+    if np.isnan(map_data).any():
+        low = np.nanpercentile(map_data, clip_low)
+        high = np.nanpercentile(map_data, clip_high)
+        map_data = np.clip(map_data, low, high)
+        map_data = (map_data - low) / (high - low + 1e-6)
+        map_data = np.nan_to_num(map_data, nan=0.0)
+    else:
+        low = np.percentile(map_data, clip_low)
+        high = np.percentile(map_data, clip_high)
+        map_data = np.clip(map_data, low, high)
+        map_data = (map_data - low) / (high - low + 1e-6)
     return map_obj, map_data
 
 
