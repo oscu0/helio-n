@@ -209,14 +209,17 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
     train_fits = train_fits[::keep_every]
     train_masks = train_masks[::keep_every]
 
-    if model_params["correct_steps_by_n"]:
-        n_train_eff = len(train_fits)
-        n_val_eff = len(val_fits)
-        steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
-        val_steps = max(1, n_val_eff // model_params["batch_size"])
-    else:
-        steps_per_epoch = max(1, n_train // model_params["batch_size"])
-        val_steps = max(1, n_val // model_params["batch_size"])
+    # if model_params["correct_steps_by_n"]:
+    #     n_train_eff = len(train_fits)
+    #     n_val_eff = len(val_fits)
+    #     steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
+    #     val_steps = max(1, n_val_eff // model_params["batch_size"])
+    # else:
+    #     steps_per_epoch = max(1, n_train // model_params["batch_size"])
+    #     val_steps = max(1, n_val // model_params["batch_size"])
+
+    steps_per_epoch = n_train
+    val_steps = n_val
 
     train_gen = pair_generator(
         train_fits,

@@ -1,4 +1,5 @@
 import json
+import os
 
 import numpy as np
 
@@ -20,6 +21,8 @@ PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
 from Library.Config import *
 from Library.IO import prepare_fits, pmap_path, prepare_pmap, resize_for_model
 
+INFER_TRAINING = False
+
 
 def fits_to_pmap(model, img2d):
     img_size = model.architecture["img_size"]
@@ -32,13 +35,20 @@ def fits_to_pmap(model, img2d):
 
     x = img[np.newaxis, ..., np.newaxis]  # (1, H, W, 1)
 
-    # Prefer the compiled inference path on the wrapped model, fall back as needed
-    if hasattr(model, "compiled_infer"):
-        prob = model.compiled_infer(x)[0, ..., 0]
-    elif hasattr(model, "predict"):
-        prob = model.predict(x)[0, ..., 0]
+    if INFER_TRAINING:
+        # Force training=True to diagnose BatchNorm moving-average issues.
+        if hasattr(model, "model"):
+            prob = model.model(x, training=True).numpy()[0, ..., 0]
+        else:
+            prob = model(x, training=True).numpy()[0, ..., 0]
     else:
-        prob = model.model.predict(x, verbose=0)[0, ..., 0]
+        # Prefer the compiled inference path on the wrapped model, fall back as needed.
+        if hasattr(model, "compiled_infer"):
+            prob = model.compiled_infer(x)[0, ..., 0]
+        elif hasattr(model, "predict"):
+            prob = model.predict(x)[0, ..., 0]
+        else:
+            prob = model.model.predict(x, verbose=0)[0, ..., 0]
 
     return prob
 
