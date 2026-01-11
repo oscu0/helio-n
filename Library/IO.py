@@ -132,9 +132,10 @@ def prepare_dataset(
 
     def index_hmi(p):
         name = os.path.basename(p)
-        match = re.search(r"(\\d{8}_\\d{6})", name)
-        if match:
-            return match.group(1)
+        for pattern in (r"(\\d{8}_\\d{6})", r"(\\d{8}_\\d{4})"):
+            match = re.search(pattern, name)
+            if match:
+                return match.group(1)
         return name[15:28]
 
     # Collect files
