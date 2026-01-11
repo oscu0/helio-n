@@ -141,6 +141,7 @@ def train_pass(tag, train_gen, val_gen, steps_per_epoch, val_steps, model_params
             patience=5,
             restore_best_weights=True,
         ),
+        Model.TrainMonitor(),
     ]
 
     history = Model.safe_fit(

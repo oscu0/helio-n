@@ -1,4 +1,5 @@
 import os
+import time
 import platform
 from pathlib import Path
 
@@ -204,6 +205,72 @@ def safe_fit(model, *args, **kwargs):
         return model.fit(*args, **kwargs)
 
 
+class TrainMonitor(tf.keras.callbacks.Callback):
+    def __init__(
+        self,
+        *,
+        overfit_loss_gap=0.1,
+        overfit_dice_gap=0.1,
+        underfit_dice=0.15,
+    ):
+        super().__init__()
+        self.overfit_loss_gap = overfit_loss_gap
+        self.overfit_dice_gap = overfit_dice_gap
+        self.underfit_dice = underfit_dice
+        self.train_start = None
+        self.epoch_start = None
+
+    @staticmethod
+    def _fmt(value):
+        if value is None:
+            return "n/a"
+        return f"{value:.4f}"
+
+    def on_train_begin(self, logs=None):
+        self.train_start = time.time()
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.epoch_start = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        train_loss = logs.get("loss")
+        val_loss = logs.get("val_loss")
+        train_dice = logs.get("dice_coef")
+        val_dice = logs.get("val_dice_coef")
+        train_acc = logs.get("accuracy")
+        val_acc = logs.get("val_accuracy")
+
+        notes = []
+        if train_loss is not None and val_loss is not None:
+            if val_loss - train_loss > self.overfit_loss_gap:
+                notes.append("overfit-loss")
+        if train_dice is not None and val_dice is not None:
+            if train_dice - val_dice > self.overfit_dice_gap:
+                notes.append("overfit-dice")
+            if train_dice < self.underfit_dice and val_dice < self.underfit_dice:
+                notes.append("underfit-dice")
+
+        elapsed_total = time.time() - self.train_start if self.train_start else 0.0
+        elapsed_epoch = time.time() - self.epoch_start if self.epoch_start else 0.0
+
+        note_str = f" notes={','.join(notes)}" if notes else ""
+        print(
+            f"\n[monitor] epoch {epoch + 1} "
+            f"elapsed_epoch={elapsed_epoch:.1f}s elapsed_total={elapsed_total:.1f}s "
+            f"loss={self._fmt(train_loss)} val_loss={self._fmt(val_loss)} "
+            f"dice={self._fmt(train_dice)} val_dice={self._fmt(val_dice)} "
+            f"acc={self._fmt(train_acc)} val_acc={self._fmt(val_acc)}"
+            f"{note_str}"
+        )
+
+    def on_train_end(self, logs=None):
+        if self.train_start is None:
+            return
+        elapsed_total = time.time() - self.train_start
+        print(f"\n[monitor] training elapsed_total={elapsed_total:.1f}s")
+
+
 def train_model(pairs_df, model_params, keep_every=3, path=None, val_df=None):
     if val_df is None:
         raise ValueError("val_df is required; build the split in Models/<A?>.py.")
@@ -293,6 +360,7 @@ def train_model(pairs_df, model_params, keep_every=3, path=None, val_df=None):
             verbose=1,
         ),
         early_stop,
+        TrainMonitor(),
     ]
 
     safe_fit(
