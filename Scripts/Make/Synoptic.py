@@ -85,6 +85,16 @@ def main():
         print('Example: python Scripts/Make.py Synoptic up')
         sys.exit(1)
 
+    if os.environ.get("MACHINE"):
+        print(
+            f"Warning: MACHINE={os.environ.get('MACHINE')} is set. "
+            "Synoptic is tied to miracle<->miracle_mini paths."
+        )
+        answer = input("Continue? [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("Aborted.")
+            sys.exit(1)
+
     configs = json.load(open(BASE_DIR + "Config/Machine.json"))
 
     host = socket.gethostname()
