@@ -132,7 +132,7 @@ def prepare_dataset(
 
     def index_hmi(p):
         name = os.path.basename(p)
-        for pattern in (r"(\\d{8}_\\d{6})", r"(\\d{8}_\\d{4})"):
+        for pattern in (r"(\d{8}_\d{6})", r"(\d{8}_\d{4})"):
             match = re.search(pattern, name)
             if match:
                 return match.group(1)
