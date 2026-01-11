@@ -367,10 +367,14 @@ def synoptic_dataset(df):
     tmp["_tmin"] = tmin.to_numpy()
 
     keep_idx = []
+    max_offset = 180  # minutes (+/- 3 hours)
     for k, target in enumerate(targets):
         # pick the closest row per day to this target (wrap-aware)
         d = circ[:, k]
         sub = tmp.assign(_d=d)
+        sub = sub[sub["_d"] <= max_offset]
+        if sub.empty:
+            continue
         best = (
             sub.sort_values(["_day", "_d", "_tmin"]).groupby("_day", sort=False).head(1)
         )
