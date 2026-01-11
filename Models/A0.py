@@ -29,8 +29,8 @@ MODEL = ModelSpec(
     },
 )
 
-D0 = DateRangeSpec(
-    range_id="D0",
+D1 = DateRangeSpec(
+    range_id="D1",
     start="20170101",
     end="20180101",
     keep_every=1,
@@ -38,7 +38,7 @@ D0 = DateRangeSpec(
 )
 
 DATE_RANGES = {
-    "D0": D0,
+    "D1": D1,
 }
 
 
