@@ -86,6 +86,7 @@ def main():
         print(
             "Usage: python Scripts/Apply.py <architecture_id> <date_range_id> <postprocessing> <start> <end>"
         )
+        print("Optional flags: --skip-existing-pmaps")
         print("Example: python Scripts/Apply.py A2 D1 P1 20170601 20170701")
         return
 
@@ -94,6 +95,7 @@ def main():
     postprocessing = sys.argv[3]
     start = sys.argv[4]
     end = sys.argv[5]
+    skip_existing_pmaps = "--skip-existing-pmaps" in sys.argv[6:]
 
     model = load_trained_model(architecture, date_range)
 
@@ -133,6 +135,22 @@ def main():
     totals = {k: 0.0 for k in ["load", "stack", "resize", "infer", "submit", "wait"]}
 
     with ProcessPoolExecutor(max_workers=plot_workers, mp_context=ctx) as executor:
+        def submit_job(job):
+            fut = executor.submit(render_job, job)
+            inflight.append(fut)
+            wait_total = 0.0
+            while len(inflight) >= max_inflight_plots:
+                oldest = inflight.popleft()
+                wait_start = time.perf_counter()
+                try:
+                    res = oldest.result()
+                    pmap_paths.append(res)
+                except Exception as e:
+                    print(f"Error in plotting task: {e}")
+                dt = time.perf_counter() - wait_start
+                wait_total += dt
+            return wait_total
+
         with tqdm(total=len(rows), desc="Generating pmaps") as pbar:
             for offset in range(0, len(rows), batch_size):
                 batch_rows = rows[offset : offset + batch_size]
@@ -143,6 +161,12 @@ def main():
                 imgs = []
                 valid_rows = []
                 for row in batch_rows:
+                    if skip_existing_pmaps:
+                        existing_pmap = pmap_path(
+                            row, model.architecture_id, model.date_range_id
+                        )
+                        if os.path.exists(existing_pmap):
+                            continue
                     try:
                         _, img = prepare_fits(row.fits_path)
                         imgs.append(img)
@@ -213,21 +237,8 @@ def main():
                             "arch_id": model.architecture_id,
                             "date_id": model.date_range_id,
                         }
-                        fut = executor.submit(render_job, job)
-                        inflight.append(fut)
                         del pmap
-
-                        while len(inflight) >= max_inflight_plots:
-                            oldest = inflight.popleft()
-                            wait_start = time.perf_counter()
-                            try:
-                                res = oldest.result()
-                                pmap_paths.append(res)
-                            except Exception as e:
-                                print(f"Error in plotting task: {e}")
-                            dt = time.perf_counter() - wait_start
-                            wait_time += dt
-                            total_plot_wait += dt
+                        wait_time += submit_job(job)
 
                     submit_time += time.perf_counter() - submit_start
 
