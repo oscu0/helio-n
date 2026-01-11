@@ -12,7 +12,13 @@ import sys
 sys.path.append(str(ROOT_DIR))
 
 from Library import Model
-from Library.Config import paths, train_batch_size
+from Library.Config import (
+    paths,
+    train_batch_size,
+    train_max_queue_size,
+    train_use_multiprocessing,
+    train_workers,
+)
 from Models import load_architecture, load_date_range
 
 
@@ -137,13 +143,17 @@ def train_pass(tag, train_gen, val_gen, steps_per_epoch, val_steps, model_params
         ),
     ]
 
-    history = model.fit(
+    history = Model.safe_fit(
+        model,
         train_gen,
         epochs=model_params["num_epochs"],
         steps_per_epoch=steps_per_epoch,
         validation_data=val_gen,
         validation_steps=val_steps,
         callbacks=callbacks,
+        workers=train_workers,
+        use_multiprocessing=train_use_multiprocessing,
+        max_queue_size=train_max_queue_size,
     )
     return model, history
 

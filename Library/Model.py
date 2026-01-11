@@ -12,7 +12,12 @@ os.environ["ABSL_LOG_LEVEL"] = "2"
 import tensorflow as tf
 
 from Library import IO
-from Library.Config import paths
+from Library.Config import (
+    paths,
+    train_max_queue_size,
+    train_use_multiprocessing,
+    train_workers,
+)
 from Models import load_architecture, load_date_range
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -182,6 +187,23 @@ def bce_dice_loss(y_true, y_pred):
     return 0.4 * tf.reduce_mean(bce) + 0.6 * dice_loss
 
 
+def safe_fit(model, *args, **kwargs):
+    try:
+        return model.fit(*args, **kwargs)
+    except TypeError as exc:
+        msg = str(exc)
+        if (
+            "workers" not in msg
+            and "use_multiprocessing" not in msg
+            and "max_queue_size" not in msg
+        ):
+            raise
+        for key in ("workers", "use_multiprocessing", "max_queue_size"):
+            kwargs.pop(key, None)
+        print("model.fit does not support multiprocessing args; retrying without them.")
+        return model.fit(*args, **kwargs)
+
+
 def train_model(pairs_df, model_params, keep_every=3, path=None, val_df=None):
     if val_df is None:
         raise ValueError("val_df is required; build the split in Models/<A?>.py.")
@@ -273,13 +295,17 @@ def train_model(pairs_df, model_params, keep_every=3, path=None, val_df=None):
         early_stop,
     ]
 
-    model.fit(
+    safe_fit(
+        model,
         train_gen,
         epochs=model_params["num_epochs"],
         steps_per_epoch=steps_per_epoch,
         validation_data=val_gen,
         validation_steps=val_steps,
         callbacks=callbacks,
+        workers=train_workers,
+        use_multiprocessing=train_use_multiprocessing,
+        max_queue_size=train_max_queue_size,
     )
 
     if path is None:
