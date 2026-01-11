@@ -1,5 +1,6 @@
 import os
 import glob
+import re
 
 import numpy as np
 import pandas as pd
@@ -130,7 +131,11 @@ def prepare_dataset(
         return os.path.basename(p)[3:16]
 
     def index_hmi(p):
-        return os.path.basename(p)[15:28]
+        name = os.path.basename(p)
+        match = re.search(r"(\\d{8}_\\d{6})", name)
+        if match:
+            return match.group(1)
+        return name[15:28]
 
     # Collect files
     fits_files = glob.glob(os.path.join(fits_root, "**", "*.fits"), recursive=True)
