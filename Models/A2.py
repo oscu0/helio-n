@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from Models._base import DateRangeSpec, ModelSpec
@@ -19,6 +20,7 @@ def _shuffle_split_year(
     df: pd.DataFrame, year: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     year_df = _year_slice(df, year)
+    year_df = _one_per_day(year_df, RANDOM_SEED + year)
     if len(year_df) == 0:
         return year_df, year_df
 
@@ -29,6 +31,24 @@ def _shuffle_split_year(
     n_val = max(1, int(len(shuffled) * VAL_FRACTION))
     n_val = min(n_val, len(shuffled) - 1)
     return shuffled.iloc[:-n_val], shuffled.iloc[-n_val:]
+
+
+def _one_per_day(df: pd.DataFrame, seed: int) -> pd.DataFrame:
+    if len(df) == 0:
+        return df
+    idx = df.index
+    if not isinstance(idx, pd.DatetimeIndex):
+        idx = pd.to_datetime(idx, errors="coerce")
+    tmp = df.copy()
+    tmp["_day"] = idx.normalize()
+    tmp = tmp[~tmp["_day"].isna()]
+    if len(tmp) == 0:
+        return tmp
+    rng = np.random.RandomState(seed)
+    tmp["_rand"] = rng.rand(len(tmp))
+    tmp = tmp.sort_values(["_day", "_rand"])
+    tmp = tmp.groupby("_day", sort=False).head(1)
+    return tmp.drop(columns=["_day", "_rand"])
 
 
 def _a2_selector(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -59,6 +79,7 @@ MODEL = ModelSpec(
         "correct_steps_by_n": True,
         "ceil_based_steps_per_epoch": False,
         "shuffle_df": False,
+        "avoid_requantization": False,
     },
 )
 
@@ -66,7 +87,7 @@ D1 = DateRangeSpec(
     range_id="D1",
     start=None,
     end=None,
-    keep_every=4,
+    keep_every=1,
     selector=_a2_selector,
 )
 
