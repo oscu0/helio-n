@@ -14,29 +14,23 @@ date_range_id = sys.argv[2]
 
 from Library.Config import paths, train_batch_size
 
-import sys
-
 sys.path.append("..")
 from Library import Model
+from Models import load_architecture, load_date_range
 
 import pandas as pd
-import json
 
-date_range = json.load(
-    open(BASE_DIR + "Config/Model/Date Range/" + (date_range_id + ".json"))
-)
-
-architecture = json.load(
-    open(BASE_DIR + "Config/Model/Architecture/" + (architecture_id + ".json"))
-)
-architecture["batch_size"] = train_batch_size
+date_range = load_date_range(architecture_id, date_range_id)
+architecture = load_architecture(architecture_id)
+architecture.setdefault("batch_size", train_batch_size)
 
 df = pd.read_parquet(paths["artifact_root"] + "Paths.parquet")
-train_df = df[date_range["start"] : date_range["end"]]
+train_df, val_df = date_range.select_pairs(df)
 
 Model.train_model(
     train_df,
-    keep_every=date_range["keep_every"],
+    val_df=val_df,
+    keep_every=date_range.keep_every,
     model_params=architecture,
     path=BASE_DIR + "Outputs/Models/" + (architecture_id + date_range_id) + ".keras",
 )

@@ -1,4 +1,3 @@
-import json
 import os
 import platform
 from pathlib import Path
@@ -14,6 +13,7 @@ import tensorflow as tf
 
 from Library import IO
 from Library.Config import paths
+from Models import load_architecture, load_date_range
 
 MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = str(MODULE_DIR.parent) + "/"
@@ -182,9 +182,14 @@ def bce_dice_loss(y_true, y_pred):
     return 0.4 * tf.reduce_mean(bce) + 0.6 * dice_loss
 
 
-def train_model(pairs_df, model_params, keep_every=3, path=None):
-    fits_paths = pairs_df["fits_path"].astype(str).tolist()
-    mask_paths = pairs_df["mask_path"].astype(str).tolist()
+def train_model(pairs_df, model_params, keep_every=3, path=None, val_df=None):
+    if val_df is None:
+        raise ValueError("val_df is required; build the split in Models/<A?>.py.")
+
+    train_df = pairs_df
+
+    fits_paths = train_df["fits_path"].astype(str).tolist()
+    mask_paths = train_df["mask_path"].astype(str).tolist()
 
     if len(fits_paths) == 0:
         raise RuntimeError("pairs_df is empty: no FITS-mask pairs to train on.")
@@ -193,33 +198,36 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
             f"Mismatch in pairs_df: {len(fits_paths)} FITS vs {len(mask_paths)} masks."
         )
 
-    n_total = len(fits_paths)
-    print(f"Training on {n_total} FITS-mask pairs")
+    val_fits = val_df["fits_path"].astype(str).tolist()
+    val_masks = val_df["mask_path"].astype(str).tolist()
 
-    # 90/10 split
-    n_val = max(1, int(0.1 * n_total))
-    n_train = n_total - n_val
+    if len(val_fits) == 0:
+        raise RuntimeError("val_df is empty: no FITS-mask pairs to validate on.")
+    if len(val_fits) != len(val_masks):
+        raise RuntimeError(
+            f"Mismatch in val_df: {len(val_fits)} FITS vs {len(val_masks)} masks."
+        )
 
-    train_fits = fits_paths[:n_train]
-    train_masks = mask_paths[:n_train]
-    val_fits = fits_paths[n_train:]
-    val_masks = mask_paths[n_train:]
+    n_train = len(fits_paths)
+    n_val = len(val_fits)
+    n_total = n_train + n_val
+    print(f"Training on {n_total} FITS-mask pairs ({n_train} train, {n_val} val)")
+
+    train_fits = fits_paths
+    train_masks = mask_paths
 
     # --- use every Nth training sample ---
     train_fits = train_fits[::keep_every]
     train_masks = train_masks[::keep_every]
 
-    # if model_params["correct_steps_by_n"]:
-    #     n_train_eff = len(train_fits)
-    #     n_val_eff = len(val_fits)
-    #     steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
-    #     val_steps = max(1, n_val_eff // model_params["batch_size"])
-    # else:
-    #     steps_per_epoch = max(1, n_train // model_params["batch_size"])
-    #     val_steps = max(1, n_val // model_params["batch_size"])
-
-    steps_per_epoch = n_train
-    val_steps = n_val
+    if model_params.get("correct_steps_by_n", False):
+        n_train_eff = len(train_fits)
+        n_val_eff = len(val_fits)
+        steps_per_epoch = max(1, n_train_eff // model_params["batch_size"])
+        val_steps = max(1, n_val_eff // model_params["batch_size"])
+    else:
+        steps_per_epoch = n_train
+        val_steps = n_val
 
     train_gen = pair_generator(
         train_fits,
@@ -282,12 +290,6 @@ def train_model(pairs_df, model_params, keep_every=3, path=None):
 
 
 def load_trained_model(architecture, date_range):
-    # architecture_json = json.load(
-    #     open(PROJECT_ROOT + "Config/Model/Architecture/" + architecture + ".json")
-    # )
-    # date_range_json = json.load(
-    #     open(PROJECT_ROOT + "Config/Model/Date Range/" + date_range + ".json")
-    # )
     path = PROJECT_ROOT + "Outputs/Models/" + architecture + date_range + ".keras"
     print(path)
 
@@ -311,32 +313,18 @@ class HelioNModel:
         model,
         architecture_id: str,
         date_range_id: str,
-        *,
-        arch_dir="Config/Model/Architecture",
-        date_dir="Config/Model/Date Range",
-        root=".",
     ):
         self.model = model
 
         self.architecture_id = architecture_id
         self.date_range_id = date_range_id
 
-        root = Path(root).resolve()
-
-        self.architecture_path = root / arch_dir / f"{architecture_id}.json"
-        self.date_range_path = root / date_dir / f"{date_range_id}.json"
-
-        self.architecture = self._read_json(self.architecture_path)
-        self.date_range = self._read_json(self.date_range_path)
+        self.architecture = load_architecture(architecture_id)
+        self.date_range = load_date_range(architecture_id, date_range_id)
 
         # Lazily-built inference fn; keep None until first predict to avoid device issues
         self._infer = None
         self._prefer_jit = platform.system().lower().startswith("linux")
-
-    @staticmethod
-    def _read_json(path: Path) -> dict:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
 
     def __str__(self):
         return "Wrapped model " + self.architecture_id + self.date_range_id

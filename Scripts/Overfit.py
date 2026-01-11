@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -14,20 +13,7 @@ sys.path.append(str(ROOT_DIR))
 
 from Library import Model
 from Library.Config import paths, train_batch_size
-
-
-def load_architecture(architecture_id: str) -> dict:
-    arch_path = ROOT_DIR / "Config" / "Model" / "Architecture" / f"{architecture_id}.json"
-    with arch_path.open("r", encoding="utf-8") as f:
-        arch = json.load(f)
-    arch.setdefault("batch_size", int(train_batch_size))
-    return arch
-
-
-def load_date_range(date_range_id: str) -> dict:
-    date_path = ROOT_DIR / "Config" / "Model" / "Date Range" / f"{date_range_id}.json"
-    with date_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+from Models import load_architecture, load_date_range
 
 
 def make_synthetic_pairs(n_samples: int, img_size: int, seed: int) -> list:
@@ -197,8 +183,9 @@ def main():
         raise ValueError("samples must be >= 2 to keep a non-empty train split.")
 
     model_params = load_architecture(args.architecture_id)
-    date_range = load_date_range(args.date_range_id)
-    keep_every = int(date_range.get("keep_every", 1))
+    model_params.setdefault("batch_size", int(train_batch_size))
+    date_range = load_date_range(args.architecture_id, args.date_range_id)
+    keep_every = int(date_range.keep_every)
 
     np.random.seed(args.seed)
     tf.random.set_seed(args.seed)
@@ -235,7 +222,7 @@ def main():
     # --- Real FITS/mask pass ---
     df = pd.read_parquet(Path(paths["artifact_root"]) / "Paths.parquet")
     df = df.sort_index()
-    real_df = df[date_range["start"] : date_range["end"]]
+    real_df, _ = date_range.select_pairs(df)
     if real_df.empty:
         raise RuntimeError("No real FITS/mask pairs for the specified date range.")
     real_pairs = list(
