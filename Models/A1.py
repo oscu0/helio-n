@@ -37,6 +37,16 @@ D1 = DateRangeSpec(
     selector=_split_selector("20170501", "20170801"),
 )
 
+
+D1 = DateRangeSpec(
+    range_id="D1",
+    start="20220101",
+    end="20230101",
+    keep_every=1,
+    selector=_split_selector("20170501", "20170801"),
+)
+
+
 DATE_RANGES = {
     "D1": D1,
 }
