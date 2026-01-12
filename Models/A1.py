@@ -38,7 +38,7 @@ D1 = DateRangeSpec(
 )
 
 
-D1 = DateRangeSpec(
+D2 = DateRangeSpec(
     range_id="D1",
     start="20220101",
     end="20230101",
