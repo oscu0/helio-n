@@ -49,6 +49,7 @@ D2 = DateRangeSpec(
 
 DATE_RANGES = {
     "D1": D1,
+    "D2": D2,
 }
 
 
