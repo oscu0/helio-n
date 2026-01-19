@@ -54,6 +54,16 @@ def stats_from_masks(m1, m2, oval=None):
     return stats
 
 
+def _empty_stats():
+    return {
+        "fourier_distance": np.nan,
+        "zernike_distance": np.nan,
+        "rel_area": np.nan,
+        "iou": np.nan,
+        "dice": np.nan,
+    }
+
+
 def load_pmap(mask_path, architecture_id, date_range_id):
     stub = SimpleNamespace(mask_path=mask_path)
     path = pmap_path(stub, architecture_id, date_range_id)
@@ -65,29 +75,36 @@ def load_pmap(mask_path, architecture_id, date_range_id):
 def worker_stats(
     position, fits_path, mask_path, architecture_id, date_range_id, smoothing_params
 ):
-    pmap = load_pmap(mask_path, architecture_id, date_range_id)
-    m1 = prepare_mask(mask_path)
-    m2 = pmap_to_mask(pmap, smoothing_params)
+    try:
+        pmap = load_pmap(mask_path, architecture_id, date_range_id)
+        m1 = prepare_mask(mask_path)
+        m2 = pmap_to_mask(pmap, smoothing_params)
 
-    row = SimpleNamespace(fits_path=fits_path, mask_path=mask_path)
-    oval = generate_omask(row)
+        row = SimpleNamespace(fits_path=fits_path, mask_path=mask_path)
+        oval = generate_omask(row)
 
-    return (
-        position,
-        stats_from_masks(m1, m2, oval=None),
-        stats_from_masks(m1, m2, oval=oval),
-    )
+        return (
+            position,
+            stats_from_masks(m1, m2, oval=None),
+            stats_from_masks(m1, m2, oval=oval),
+            False,
+        )
+    except Exception as e:
+        print(f"Warning: stats skipped for {mask_path}: {e}")
+        empty = _empty_stats()
+        return position, empty, empty, True
 
 
 def compute_stats_df(df, architecture_id, date_range_id, smoothing_params, workers):
     stats_results = [None] * len(df)
     stats_oval_results = [None] * len(df)
+    skipped = 0
 
     rows = list(df.itertuples())
     if workers <= 1:
         iterator = enumerate(rows)
         for pos, row in tqdm(iterator, total=len(rows), desc="stats"):
-            _, stats_full, stats_oval = worker_stats(
+            _, stats_full, stats_oval, was_skipped = worker_stats(
                 pos,
                 row.fits_path,
                 row.mask_path,
@@ -97,6 +114,8 @@ def compute_stats_df(df, architecture_id, date_range_id, smoothing_params, worke
             )
             stats_results[pos] = stats_full
             stats_oval_results[pos] = stats_oval
+            if was_skipped:
+                skipped += 1
     else:
         ctx = mp.get_context("spawn")
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor:
@@ -114,12 +133,16 @@ def compute_stats_df(df, architecture_id, date_range_id, smoothing_params, worke
                     )
                 )
             for future in tqdm(as_completed(futures), total=len(futures), desc="stats"):
-                pos, stats_full, stats_oval = future.result()
+                pos, stats_full, stats_oval, was_skipped = future.result()
                 stats_results[pos] = stats_full
                 stats_oval_results[pos] = stats_oval
+                if was_skipped:
+                    skipped += 1
 
     stats_df = pd.DataFrame(stats_results, index=df.index)
     stats_oval_df = pd.DataFrame(stats_oval_results, index=df.index).add_suffix("_oval")
+    if skipped:
+        print(f"Warning: skipped {skipped} rows due to missing/corrupt pmaps.")
     return pd.concat([stats_df, stats_oval_df], axis=1)
 
 
