@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 import os
+import warnings
 
 # Python warnings
 os.environ["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
+# mahotas zernike can emit benign RuntimeWarnings when radius is 0
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid value encountered in divide.*",
+    category=RuntimeWarning,
+    module=r"mahotas\.features\.zernike",
+)
 # TensorFlow / XLA C++ logging
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # hide INFO/WARNING/ERROR
 os.environ["ABSL_MIN_LOG_LEVEL"] = "3"     # silence absl logging
