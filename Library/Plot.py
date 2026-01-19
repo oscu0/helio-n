@@ -1,4 +1,5 @@
 import astropy.units as u
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import sunpy.map
@@ -21,6 +22,14 @@ from .IO import (
     unet_mask_path,
 )
 from .Metrics import generate_omask
+
+# mahotas zernike can emit benign RuntimeWarnings when radius is 0
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid value encountered in divide.*",
+    category=RuntimeWarning,
+    module=r"mahotas\.features\.zernike",
+)
 
 
 cmap = ct.aia_color_table(u.Quantity(193, "Angstrom"))
