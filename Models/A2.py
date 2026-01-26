@@ -10,7 +10,8 @@ VAL_FRACTION = 0.1
 RANDOM_SEED = 0
 
 
-def _to_dt_index(idx) -> pd.DatetimeIndex:
+def _to_dt_index(idx):
+    """Normalize index-like values into datetimes (NaT on parse failure)."""
     raw = pd.Series(idx.astype(str))
     dt_direct = pd.to_datetime(raw, format="%Y%m%d_%H%M", errors="coerce")
     dt_direct_s = pd.to_datetime(raw, format="%Y%m%d_%H%M%S", errors="coerce")
@@ -22,22 +23,23 @@ def _to_dt_index(idx) -> pd.DatetimeIndex:
     return dt_direct.fillna(dt_direct_s).fillna(dt).fillna(dt_minutes)
 
 
-def _with_dt(df: pd.DataFrame) -> pd.DataFrame:
+def _with_dt(df):
+    """Return a copy of df with a parsed '_dt' datetime column (drops NaT rows)."""
     dt = _to_dt_index(df.index)
     df = df.copy()
     df["_dt"] = pd.to_datetime(dt).to_numpy()
     return df.dropna(subset=["_dt"])
 
 
-def _year_slice(df: pd.DataFrame, year: int) -> pd.DataFrame:
+def _year_slice(df, year):
+    """Select rows whose parsed datetime year matches the requested year."""
     if "_dt" not in df.columns:
         df = _with_dt(df)
     return df[df["_dt"].dt.year == year]
 
 
-def _shuffle_split_year(
-    df: pd.DataFrame, year: int
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _shuffle_split_year(df, year):
+    """Shuffle a single year, then split into train/val partitions."""
     year_df = _year_slice(df, year)
     year_df = _one_per_day(year_df, RANDOM_SEED + year)
     if len(year_df) == 0:
@@ -59,7 +61,30 @@ def _shuffle_split_year(
     )
 
 
-def _one_per_day(df: pd.DataFrame, seed: int) -> pd.DataFrame:
+def _shuffle_split_year_no_day(df, year):
+    """Shuffle a single year, then split into train/val (no per-day filter)."""
+    year_df = _year_slice(df, year)
+    if len(year_df) == 0:
+        empty = year_df.drop(columns=["_dt"], errors="ignore")
+        return empty, empty
+
+    shuffled = year_df.sample(frac=1.0, random_state=RANDOM_SEED + year)
+    if len(shuffled) == 1:
+        return (
+            shuffled.drop(columns=["_dt"], errors="ignore"),
+            shuffled.iloc[0:0].drop(columns=["_dt"], errors="ignore"),
+        )
+
+    n_val = max(1, int(len(shuffled) * VAL_FRACTION))
+    n_val = min(n_val, len(shuffled) - 1)
+    return (
+        shuffled.iloc[:-n_val].drop(columns=["_dt"], errors="ignore"),
+        shuffled.iloc[-n_val:].drop(columns=["_dt"], errors="ignore"),
+    )
+
+
+def _one_per_day(df, seed):
+    """Downsample to one random row per day using a fixed seed."""
     if len(df) == 0:
         return df
     if "_dt" not in df.columns:
@@ -75,7 +100,8 @@ def _one_per_day(df: pd.DataFrame, seed: int) -> pd.DataFrame:
     return tmp.drop(columns=["_day", "_rand", "_dt"])
 
 
-def _a2_selector(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _a2_selector(df):
+    """A2 selection: one-per-day then per-year shuffle split into train/val."""
     df = _with_dt(df)
     if len(df) == 0:
         return df, df
@@ -85,6 +111,30 @@ def _a2_selector(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     val_parts = []
     for year in YEARS:
         train_year, val_year = _shuffle_split_year(df, year)
+        if len(train_year):
+            train_parts.append(train_year)
+        if len(val_year):
+            val_parts.append(val_year)
+
+    train_df = pd.concat(train_parts) if train_parts else df.iloc[0:0]
+    val_df = pd.concat(val_parts) if val_parts else df.iloc[0:0]
+    return (
+        train_df.drop(columns=["_dt"], errors="ignore"),
+        val_df.drop(columns=["_dt"], errors="ignore"),
+    )
+
+
+def _a2_selector_no_day(df):
+    """A2 selection: per-year shuffle split into train/val (no per-day filter)."""
+    df = _with_dt(df)
+    if len(df) == 0:
+        return df, df
+    df = df.sort_values("_dt")
+
+    train_parts = []
+    val_parts = []
+    for year in YEARS:
+        train_year, val_year = _shuffle_split_year_no_day(df, year)
         if len(train_year):
             train_parts.append(train_year)
         if len(val_year):
@@ -120,14 +170,25 @@ D1 = DateRangeSpec(
     selector=_a2_selector,
 )
 
+D2 = DateRangeSpec(
+    range_id="D2",
+    start=None,
+    end=None,
+    keep_every=1,
+    selector=_a2_selector_no_day,
+)
+
 DATE_RANGES = {
     "D1": D1,
+    "D2": D2,
 }
 
 
-def get_architecture() -> dict:
+def get_architecture():
+    """Return the architecture parameter dict for A2."""
     return dict(MODEL.params)
 
 
-def get_date_range(date_range_id: str) -> DateRangeSpec:
+def get_date_range(date_range_id):
+    """Return the date-range spec for A2 by ID."""
     return DATE_RANGES[date_range_id]
