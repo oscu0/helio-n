@@ -147,7 +147,7 @@ def compute_stats_df(df, architecture_id, date_range_id, smoothing_params, worke
 
 
 def build_output_path(architecture_id, date_range_id, postprocessing):
-    out_dir = Path(paths["artifact_root"]) / "Stats"
+    out_dir = Path("./Outputs") / "Stats"
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / f"{architecture_id}{date_range_id}{postprocessing} Stats.parquet"
 
