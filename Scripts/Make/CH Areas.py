@@ -4,6 +4,7 @@ from pathlib import Path
 
 import multiprocessing as mp
 from functools import partial
+from types import SimpleNamespace
 import pandas as pd
 from tqdm import tqdm
 
@@ -34,13 +35,14 @@ def worker_compute(rows, specs, smoothing_params):
     geom_cache = {}
 
     def get_geom(row):
-        key = row.fits_path
+        key = row[1]
         cached = geom_cache.get(key)
         if cached is not None:
             return cached
 
-        m = sunpy.map.Map(row.fits_path)
-        omask = generate_omask(row)
+        row_ns = SimpleNamespace(fits_path=row[1], mask_path=row[2])
+        m = sunpy.map.Map(row[1])
+        omask = generate_omask(row_ns)
 
         # precompute 1/mu by projecting a unit mask once
         inv_mu = project(m, np.ones_like(omask, dtype=float))
@@ -64,17 +66,18 @@ def worker_compute(rows, specs, smoothing_params):
 
     for row in rows:
         record = {
-            "key": row.Index,
-            "fits_path": row.fits_path,
-            "mask_path": row.mask_path,
+            "key": row[0],
+            "fits_path": row[1],
+            "mask_path": row[2],
         }
 
-        idl_mask = prepare_mask(row.mask_path)
+        idl_mask = prepare_mask(row[2])
         record["s_idl"] = rel_area_from_mask(row, idl_mask)
 
         for arch, date_id in specs:
             spec = f"{arch}{date_id}"
-            pmap_file = pmap_path(row, arch, date_id)
+            row_ns = SimpleNamespace(fits_path=row[1], mask_path=row[2])
+            pmap_file = pmap_path(row_ns, arch, date_id)
             if not Path(pmap_file).exists():
                 record[f"s_{spec.lower()}"] = float("nan")
                 continue
@@ -110,7 +113,7 @@ def main(argv):
     specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
     smoothing_params = get_postprocessing_params("P0")
 
-    rows = list(df.itertuples())
+    rows = list(df[["fits_path", "mask_path"]].itertuples(index=True, name=None))
     max_workers = max(1, int(apply_config.get("plot_threads", 1)))
     chunks = chunk_rows(rows, max_workers)
 
