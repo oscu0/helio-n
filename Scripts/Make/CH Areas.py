@@ -23,48 +23,33 @@ from Library.Processing import get_postprocessing_params, pmap_to_mask
 from Library.IO import prepare_mask
 
 
-def chunk_rows(rows, chunks):
-    if chunks <= 1:
+def chunk_rows(rows, chunk_size):
+    if chunk_size <= 0:
         return [rows]
-    size = max(1, len(rows) // chunks)
-    return [rows[i : i + size] for i in range(0, len(rows), size)]
+    return [rows[i : i + chunk_size] for i in range(0, len(rows), chunk_size)]
 
 
 def worker_compute(rows, specs, smoothing_params):
     results = []
-    geom_cache = {}
 
-    def get_geom(row):
-        key = row[1]
-        cached = geom_cache.get(key)
-        if cached is not None:
-            return cached
-
+    for row in rows:
         row_ns = SimpleNamespace(fits_path=row[1], mask_path=row[2])
         m = sunpy.map.Map(row[1])
         omask = generate_omask(row_ns)
-
-        # precompute 1/mu by projecting a unit mask once
         inv_mu = project(m, np.ones_like(omask, dtype=float))
 
-        # precompute sun area once per fits
         hpc_coords = all_coordinates_from_map(m)
         disk_mask = coordinate_is_on_solar_disk(hpc_coords)
         sun = project(m, disk_mask).sum()
 
-        geom_cache[key] = (omask, inv_mu, sun)
-        return geom_cache[key]
+        def rel_area_from_mask(mask_2d):
+            ch_mask = mask_2d * omask
+            proj = np.zeros_like(ch_mask, dtype=float)
+            good = (ch_mask != 0) & (inv_mu > 1e-3)
+            proj[good] = ch_mask[good] * inv_mu[good]
+            ch_area = np.nan_to_num(proj, 0).sum()
+            return ch_area / sun
 
-    def rel_area_from_mask(row, mask_2d):
-        omask, inv_mu, sun = get_geom(row)
-        ch_mask = mask_2d * omask
-        proj = np.zeros_like(ch_mask, dtype=float)
-        good = (ch_mask != 0) & (inv_mu > 1e-3)
-        proj[good] = ch_mask[good] * inv_mu[good]
-        ch_area = np.nan_to_num(proj, 0).sum()
-        return ch_area / sun
-
-    for row in rows:
         record = {
             "key": row[0],
             "fits_path": row[1],
@@ -72,7 +57,7 @@ def worker_compute(rows, specs, smoothing_params):
         }
 
         idl_mask = prepare_mask(row[2])
-        record["s_idl"] = rel_area_from_mask(row, idl_mask)
+        record["s_idl"] = rel_area_from_mask(idl_mask)
 
         for arch, date_id in specs:
             spec = f"{arch}{date_id}"
@@ -83,7 +68,7 @@ def worker_compute(rows, specs, smoothing_params):
                 continue
             pmap = prepare_pmap(pmap_file)
             model_mask = pmap_to_mask(pmap, smoothing_params)
-            record[f"s_{spec.lower()}"] = rel_area_from_mask(row, model_mask)
+            record[f"s_{spec.lower()}"] = rel_area_from_mask(model_mask)
 
         results.append(record)
 
@@ -115,7 +100,8 @@ def main(argv):
 
     rows = list(df[["fits_path", "mask_path"]].itertuples(index=True, name=None))
     max_workers = max(1, int(apply_config.get("plot_threads", 1)))
-    chunks = chunk_rows(rows, max_workers)
+    chunk_size = int(apply_config.get("apply_batch_size", 16))
+    chunks = chunk_rows(rows, chunk_size)
 
     results = []
     ctx = mp.get_context("spawn")
