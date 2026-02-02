@@ -10,7 +10,7 @@ sys.path.append(str(ROOT_DIR))
 
 from Library.CH import ch_rel_area
 from Library.Config import paths
-from Library.Model import load_trained_model
+from Library.IO import pmap_path, prepare_pmap
 
 
 def main(argv):
@@ -34,13 +34,6 @@ def main(argv):
         return 1
 
     specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
-    models = {}
-    for arch, date_id in specs:
-        try:
-            models[f"{arch}{date_id}"] = load_trained_model(arch, date_id)
-        except Exception as e:
-            print(f"Failed to load model {arch}{date_id}: {e}")
-            return 1
 
     rows = list(df.itertuples())
     results = []
@@ -52,11 +45,17 @@ def main(argv):
             "mask_path": row.mask_path,
         }
 
-        record["v_idl"] = ch_rel_area(row, reference_mode=True)
+        record["s_idl"] = ch_rel_area(row, reference_mode=True)
 
-        for spec, model in models.items():
-            record[f"v_{spec.lower()}"] = ch_rel_area(
-                row, model=model, reference_mode=False
+        for arch, date_id in specs:
+            spec = f"{arch}{date_id}"
+            pmap_file = pmap_path(row, arch, date_id)
+            if not Path(pmap_file).exists():
+                record[f"s_{spec.lower()}"] = float("nan")
+                continue
+            pmap = prepare_pmap(pmap_file)
+            record[f"s_{spec.lower()}"] = ch_rel_area(
+                row, pmap=pmap, reference_mode=False
             )
 
         results.append(record)
