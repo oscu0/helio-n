@@ -8,9 +8,16 @@ from tqdm import tqdm
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
-from Library.CH import ch_rel_area
+import numpy as np
+import sunpy.map
+from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_disk
+
+from Library.CH import project
 from Library.Config import paths
 from Library.IO import pmap_path, prepare_pmap
+from Library.Metrics import generate_omask
+from Library.Processing import get_postprocessing_params, pmap_to_mask
+from Library.IO import prepare_mask
 
 
 def main(argv):
@@ -34,9 +41,40 @@ def main(argv):
         return 1
 
     specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
+    smoothing_params = get_postprocessing_params("P0")
 
     rows = list(df.itertuples())
     results = []
+    geom_cache = {}
+
+    def get_geom(row):
+        key = row.fits_path
+        cached = geom_cache.get(key)
+        if cached is not None:
+            return cached
+
+        m = sunpy.map.Map(row.fits_path)
+        omask = generate_omask(row)
+
+        # precompute 1/mu by projecting a unit mask once
+        inv_mu = project(m, np.ones_like(omask, dtype=float))
+
+        # precompute sun area once per fits
+        hpc_coords = all_coordinates_from_map(m)
+        disk_mask = coordinate_is_on_solar_disk(hpc_coords)
+        sun = project(m, disk_mask).sum()
+
+        geom_cache[key] = (omask, inv_mu, sun)
+        return geom_cache[key]
+
+    def rel_area_from_mask(row, mask_2d):
+        omask, inv_mu, sun = get_geom(row)
+        ch_mask = mask_2d * omask
+        proj = np.zeros_like(ch_mask, dtype=float)
+        good = (ch_mask != 0) & (inv_mu > 1e-3)
+        proj[good] = ch_mask[good] * inv_mu[good]
+        ch_area = np.nan_to_num(proj, 0).sum()
+        return ch_area / sun
 
     for row in tqdm(rows, desc="CH areas"):
         record = {
@@ -45,7 +83,8 @@ def main(argv):
             "mask_path": row.mask_path,
         }
 
-        record["s_idl"] = ch_rel_area(row, reference_mode=True)
+        idl_mask = prepare_mask(row.mask_path)
+        record["s_idl"] = rel_area_from_mask(row, idl_mask)
 
         for arch, date_id in specs:
             spec = f"{arch}{date_id}"
@@ -54,9 +93,8 @@ def main(argv):
                 record[f"s_{spec.lower()}"] = float("nan")
                 continue
             pmap = prepare_pmap(pmap_file)
-            record[f"s_{spec.lower()}"] = ch_rel_area(
-                row, pmap=pmap, reference_mode=False
-            )
+            model_mask = pmap_to_mask(pmap, smoothing_params)
+            record[f"s_{spec.lower()}"] = rel_area_from_mask(row, model_mask)
 
         results.append(record)
 
