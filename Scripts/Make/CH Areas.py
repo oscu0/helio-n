@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import multiprocessing as mp
+from functools import partial
 import pandas as pd
 from tqdm import tqdm
 
@@ -13,37 +15,21 @@ import sunpy.map
 from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_disk
 
 from Library.CH import project
-from Library.Config import paths
+from Library.Config import apply_config, paths
 from Library.IO import pmap_path, prepare_pmap
 from Library.Metrics import generate_omask
 from Library.Processing import get_postprocessing_params, pmap_to_mask
 from Library.IO import prepare_mask
 
 
-def main(argv):
-    if len(argv) < 3:
-        print("Usage: python -m Scripts.Make CH\\ Areas <start> <end>")
-        print("Example: python -m Scripts.Make CH\\ Areas 20100101 20101231")
-        return 1
+def chunk_rows(rows, chunks):
+    if chunks <= 1:
+        return [rows]
+    size = max(1, len(rows) // chunks)
+    return [rows[i : i + size] for i in range(0, len(rows), size)]
 
-    start = argv[1]
-    end = argv[2]
 
-    paths_parquet = Path(paths["artifact_root"]) / "Paths.parquet"
-    if not paths_parquet.exists():
-        print(f"Missing {paths_parquet}")
-        return 1
-
-    df = pd.read_parquet(paths_parquet)
-    df = df[start:end]
-    if df.empty:
-        print("No rows in requested date range.")
-        return 1
-
-    specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
-    smoothing_params = get_postprocessing_params("P0")
-
-    rows = list(df.itertuples())
+def worker_compute(rows, specs, smoothing_params):
     results = []
     geom_cache = {}
 
@@ -76,7 +62,7 @@ def main(argv):
         ch_area = np.nan_to_num(proj, 0).sum()
         return ch_area / sun
 
-    for row in tqdm(rows, desc="CH areas"):
+    for row in rows:
         record = {
             "key": row.Index,
             "fits_path": row.fits_path,
@@ -97,6 +83,44 @@ def main(argv):
             record[f"s_{spec.lower()}"] = rel_area_from_mask(row, model_mask)
 
         results.append(record)
+
+    return results
+
+
+def main(argv):
+    if len(argv) < 3:
+        print("Usage: python -m Scripts.Make CH\\ Areas <start> <end>")
+        print("Example: python -m Scripts.Make CH\\ Areas 20100101 20101231")
+        return 1
+
+    start = argv[1]
+    end = argv[2]
+
+    paths_parquet = Path(paths["artifact_root"]) / "Paths.parquet"
+    if not paths_parquet.exists():
+        print(f"Missing {paths_parquet}")
+        return 1
+
+    df = pd.read_parquet(paths_parquet)
+    df = df[start:end]
+    if df.empty:
+        print("No rows in requested date range.")
+        return 1
+
+    specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
+    smoothing_params = get_postprocessing_params("P0")
+
+    rows = list(df.itertuples())
+    max_workers = max(1, int(apply_config.get("plot_threads", 1)))
+    chunks = chunk_rows(rows, max_workers)
+
+    results = []
+    ctx = mp.get_context("spawn")
+    worker_fn = partial(worker_compute, specs=specs, smoothing_params=smoothing_params)
+    with ctx.Pool(processes=min(max_workers, len(chunks))) as pool:
+        iterator = pool.imap_unordered(worker_fn, chunks)
+        for chunk_result in tqdm(iterator, total=len(chunks), desc="CH areas"):
+            results.extend(chunk_result)
 
     out_df = pd.DataFrame(results).set_index("key")
 
