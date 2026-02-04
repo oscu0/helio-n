@@ -211,3 +211,4 @@ Outputs/Models/**
 Data/Training/**
 Data/Inference/**
 *.keras
+userpwd.py
