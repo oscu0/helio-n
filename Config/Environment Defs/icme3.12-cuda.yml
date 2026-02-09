@@ -55,6 +55,7 @@ dependencies:
       - imageio
       - lxml=6.0.2
       - pyspedas
+      - pytplot-mpl-temp>=2.1.17
       - spacepy=0.7.0
       - pyarrow=22.0.0
       - rich
