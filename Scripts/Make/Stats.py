@@ -159,24 +159,56 @@ def build_output_path(architecture_id, date_range_id, postprocessing, date_range
 
 
 def main(argv):
-    if len(argv) not in (4, 5, 6, 7):
-        print(
-            "Usage: python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic] [<start_date> <end_date>]"
-        )
-        print("Example: python Scripts/Make.py Stats A1 D1 P1")
-        print("Example: python Scripts/Make.py Stats A1 D1 P1 synoptic")
-        print("Example: python Scripts/Make.py Stats A1 D1 P1 2020-01-01 2020-12-31")
-        print("Example: python Scripts/Make.py Stats A1 D1 P1 synoptic 2020-01-01 2020-12-31")
+    if len(argv) < 4:
+        print("Usage (single model):")
+        print("  python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic] [<start_date> <end_date>]")
+        print("\nUsage (multiple models):")
+        print("  python Scripts/Make.py Stats <arch:range> [<arch:range> ...] <postprocessing> [synoptic] [<start_date> <end_date>]")
+        print("\nExamples:")
+        print("  python Scripts/Make.py Stats A1 D1 P1")
+        print("  python Scripts/Make.py Stats A1 D1 P1 synoptic")
+        print("  python Scripts/Make.py Stats A1:D1 A2:D1 A2:D2 P1")
+        print("  python Scripts/Make.py Stats A1:D1 A2:D1 A2:D2 P1 synoptic")
+        print("  python Scripts/Make.py Stats A1 D1 P1 2020-01-01 2020-12-31")
         return 1
 
-    architecture_id, date_range_id, postprocessing = argv[1:4]
+    # Detect if we're in "multiple models" mode (2nd arg contains ':')
+    is_multi_mode = len(argv) > 2 and ':' in argv[2]
+    
+    if is_multi_mode:
+        # Parse arch:range pairs until we hit postprocessing
+        models = []
+        arg_idx = 2
+        while arg_idx < len(argv) and ':' in argv[arg_idx]:
+            arch, date_range = argv[arg_idx].split(':', 1)
+            models.append((arch, date_range))
+            arg_idx += 1
+        
+        if not models:
+            print("Error: no valid architecture:date_range pairs found.")
+            return 1
+        
+        if arg_idx >= len(argv):
+            print("Error: postprocessing parameter required.")
+            return 1
+        
+        postprocessing = argv[arg_idx]
+        arg_idx += 1
+    else:
+        # Single model mode: A1 D1 P1 ...
+        if len(argv) < 5:
+            print("Error: single model mode requires <architecture_id> <date_range_id> <postprocessing>")
+            return 1
+        
+        models = [(argv[1], argv[2])]
+        postprocessing = argv[3]
+        arg_idx = 4
     
     use_synoptic = False
     start_date = None
     end_date = None
     
-    # Parse remaining arguments
-    arg_idx = 4
+    # Parse remaining arguments (synoptic and date range)
     if arg_idx < len(argv) and argv[arg_idx] == "synoptic":
         use_synoptic = True
         arg_idx += 1
@@ -188,9 +220,8 @@ def main(argv):
         else:
             print("Error: if providing date range, both start and end dates are required.")
             return 1
-
+    
     smoothing_params = get_postprocessing_params(postprocessing)
-
     paths_name = "Paths (Synoptic).parquet" if use_synoptic else "Paths.parquet"
     paths_parquet = Path(paths["artifact_root"]) / paths_name
     if not paths_parquet.exists():
@@ -203,19 +234,23 @@ def main(argv):
         return 1
 
     workers = max(1, int(apply_config["plot_threads"]))
-    stats_df = compute_stats_df(
-        df, architecture_id, date_range_id, smoothing_params, workers
-    )
-    stats_df.index.name = "key"
+    
+    # Process each model
+    for architecture_id, date_range_id in models:
+        stats_df = compute_stats_df(
+            df, architecture_id, date_range_id, smoothing_params, workers
+        )
+        stats_df.index.name = "key"
 
-    # Build date range string for filename if provided
-    date_range_str = None
-    if start_date and end_date:
-        date_range_str = f"{start_date} to {end_date}"
+        # Build date range string for filename if provided
+        date_range_str = None
+        if start_date and end_date:
+            date_range_str = f"{start_date} to {end_date}"
 
-    out_path = build_output_path(architecture_id, date_range_id, postprocessing, date_range_str)
-    stats_df.to_parquet(out_path)
-    print(f"Saved {out_path}")
+        out_path = build_output_path(architecture_id, date_range_id, postprocessing, date_range_str)
+        stats_df.to_parquet(out_path)
+        print(f"Saved {out_path}")
+    
     return 0
 
 
