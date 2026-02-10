@@ -146,25 +146,48 @@ def compute_stats_df(df, architecture_id, date_range_id, smoothing_params, worke
     return pd.concat([stats_df, stats_oval_df], axis=1)
 
 
-def build_output_path(architecture_id, date_range_id, postprocessing):
+def build_output_path(architecture_id, date_range_id, postprocessing, date_range_str=None):
     out_dir = Path("./Outputs") / "Stats"
     out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / f"{architecture_id}{date_range_id}{postprocessing} Stats.parquet"
+    
+    filename = f"{architecture_id}{date_range_id}{postprocessing}"
+    if date_range_str:
+        filename += f" {date_range_str}"
+    filename += " Stats.parquet"
+    
+    return out_dir / filename
 
 
 def main(argv):
-    if len(argv) not in (4, 5):
+    if len(argv) not in (4, 5, 6, 7):
         print(
-            "Usage: python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic]"
+            "Usage: python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic] [<start_date> <end_date>]"
         )
         print("Example: python Scripts/Make.py Stats A1 D1 P1")
+        print("Example: python Scripts/Make.py Stats A1 D1 P1 synoptic")
+        print("Example: python Scripts/Make.py Stats A1 D1 P1 2020-01-01 2020-12-31")
+        print("Example: python Scripts/Make.py Stats A1 D1 P1 synoptic 2020-01-01 2020-12-31")
         return 1
 
     architecture_id, date_range_id, postprocessing = argv[1:4]
-    use_synoptic = len(argv) == 5
-    if use_synoptic and argv[4] != "synoptic":
-        print("Optional 4th argument must be 'synoptic' if provided.")
-        return 1
+    
+    use_synoptic = False
+    start_date = None
+    end_date = None
+    
+    # Parse remaining arguments
+    arg_idx = 4
+    if arg_idx < len(argv) and argv[arg_idx] == "synoptic":
+        use_synoptic = True
+        arg_idx += 1
+    
+    if arg_idx < len(argv):
+        if arg_idx + 1 < len(argv):
+            start_date = argv[arg_idx]
+            end_date = argv[arg_idx + 1]
+        else:
+            print("Error: if providing date range, both start and end dates are required.")
+            return 1
 
     smoothing_params = get_postprocessing_params(postprocessing)
 
@@ -185,7 +208,12 @@ def main(argv):
     )
     stats_df.index.name = "key"
 
-    out_path = build_output_path(architecture_id, date_range_id, postprocessing)
+    # Build date range string for filename if provided
+    date_range_str = None
+    if start_date and end_date:
+        date_range_str = f"{start_date} to {end_date}"
+
+    out_path = build_output_path(architecture_id, date_range_id, postprocessing, date_range_str)
     stats_df.to_parquet(out_path)
     print(f"Saved {out_path}")
     return 0
