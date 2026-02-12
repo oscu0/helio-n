@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
@@ -158,70 +159,54 @@ def build_output_path(architecture_id, date_range_id, postprocessing, date_range
     return out_dir / filename
 
 
+def parse_spec(spec_str):
+    """
+    Parse spec string like 'A1D1P1' into (arch, date_range, postprocessing).
+    Returns tuple or None if invalid.
+    """
+    match = re.match(r'A(\d)D(\d)P(.+)', spec_str)
+    if match:
+        arch, date_range, postproc = match.groups()
+        return f"A{arch}", f"D{date_range}", f"P{postproc}"
+    return None
+
+
 def main(argv):
-    if len(argv) < 4:
-        print("Usage (single model):")
-        print("  python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic] [<start_date> <end_date>]")
-        print("\nUsage (multiple models):")
-        print("  python Scripts/Make.py Stats <arch:range> [<arch:range> ...] <postprocessing> [synoptic] [<start_date> <end_date>]")
+    if len(argv) < 3:
+        print("Usage: python Scripts/Make.py Stats <start> <end> [<spec> ...] [--synoptic]")
+        print("\nwhere <spec> is formatted like A1D1P1 (defaults: A1D1P1, A2D1P1, A2D2P1)")
         print("\nExamples:")
-        print("  python Scripts/Make.py Stats A1 D1 P1")
-        print("  python Scripts/Make.py Stats A1 D1 P1 synoptic")
-        print("  python Scripts/Make.py Stats A1:D1 A2:D1 A2:D2 P1")
-        print("  python Scripts/Make.py Stats A1:D1 A2:D1 A2:D2 P1 synoptic")
-        print("  python Scripts/Make.py Stats A1 D1 P1 2020-01-01 2020-12-31")
+        print("  python Scripts/Make.py Stats 20100101 20101231")
+        print("  python Scripts/Make.py Stats 20100101 20101231 A1D1P1")
+        print("  python Scripts/Make.py Stats 20100101 20101231 A1D1P1 A2D2P1 --synoptic")
         return 1
 
-    # Detect if we're in "multiple models" mode (2nd arg contains ':')
-    is_multi_mode = len(argv) > 2 and ':' in argv[2]
-    
-    if is_multi_mode:
-        # Parse arch:range pairs until we hit postprocessing
-        models = []
-        arg_idx = 2
-        while arg_idx < len(argv) and ':' in argv[arg_idx]:
-            arch, date_range = argv[arg_idx].split(':', 1)
-            models.append((arch, date_range))
-            arg_idx += 1
-        
-        if not models:
-            print("Error: no valid architecture:date_range pairs found.")
-            return 1
-        
-        if arg_idx >= len(argv):
-            print("Error: postprocessing parameter required.")
-            return 1
-        
-        postprocessing = argv[arg_idx]
-        arg_idx += 1
-    else:
-        # Single model mode: A1 D1 P1 ...
-        if len(argv) < 5:
-            print("Error: single model mode requires <architecture_id> <date_range_id> <postprocessing>")
-            return 1
-        
-        models = [(argv[1], argv[2])]
-        postprocessing = argv[3]
-        arg_idx = 4
-    
+    start_date = argv[1]
+    end_date = argv[2]
+
+    # Parse specs and flags from remaining arguments
+    specs = []
     use_synoptic = False
-    start_date = None
-    end_date = None
-    
-    # Parse remaining arguments (synoptic and date range)
-    if arg_idx < len(argv) and argv[arg_idx] == "synoptic":
-        use_synoptic = True
-        arg_idx += 1
-    
-    if arg_idx < len(argv):
-        if arg_idx + 1 < len(argv):
-            start_date = argv[arg_idx]
-            end_date = argv[arg_idx + 1]
+
+    for arg in argv[3:]:
+        if arg == "--synoptic":
+            use_synoptic = True
         else:
-            print("Error: if providing date range, both start and end dates are required.")
-            return 1
-    
-    smoothing_params = get_postprocessing_params(postprocessing)
+            parsed = parse_spec(arg)
+            if parsed:
+                specs.append(parsed)
+            else:
+                print(f"Warning: invalid spec '{arg}', skipping")
+
+    # Use defaults if no specs provided
+    if not specs:
+        specs = [
+            ("A1", "D1", "P1"),
+            ("A2", "D1", "P1"),
+            ("A2", "D2", "P1"),
+        ]
+        print(f"Using default specs: {' '.join(f'{a}{d}{p}' for a, d, p in specs)}")
+
     paths_name = "Paths (Synoptic).parquet" if use_synoptic else "Paths.parquet"
     paths_parquet = Path(paths["artifact_root"]) / paths_name
     if not paths_parquet.exists():
@@ -229,28 +214,36 @@ def main(argv):
         return 1
 
     df = pd.read_parquet(paths_parquet)
+    
+    # String-based date filtering (index is typically YYYYMMDD strings)
+    df = df[(df.index >= start_date) & (df.index <= end_date)]
     if df.empty:
-        print("Paths.parquet is empty.")
+        print(f"No data found in date range {start_date} to {end_date}")
         return 1
 
+    print(f"Filtered to {len(df)} rows")
+
+    print(f"Processing {len(df)} rows across {len(specs)} models")
+
     workers = max(1, int(apply_config["plot_threads"]))
-    
-    # Process each model
-    for architecture_id, date_range_id in models:
+
+    # Process each model/postprocessing combo
+    for architecture_id, date_range_id, postprocessing in specs:
+        smoothing_params = get_postprocessing_params(postprocessing)
         stats_df = compute_stats_df(
             df, architecture_id, date_range_id, smoothing_params, workers
         )
         stats_df.index.name = "key"
 
-        # Build date range string for filename if provided
-        date_range_str = None
-        if start_date and end_date:
-            date_range_str = f"{start_date} to {end_date}"
+        # Build date range string for filename
+        date_range_str = f"{start_date} to {end_date}"
 
-        out_path = build_output_path(architecture_id, date_range_id, postprocessing, date_range_str)
+        out_path = build_output_path(
+            architecture_id, date_range_id, postprocessing, date_range_str
+        )
         stats_df.to_parquet(out_path)
         print(f"Saved {out_path}")
-    
+
     return 0
 
 
