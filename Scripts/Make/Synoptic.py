@@ -141,8 +141,11 @@ def main():
     )
 
     df_new = df.copy()
-    for kind in ("fits", "mask", "hmi"):
-        df_new[f"{kind}_path"] = df_new[f"{kind}_path"].str.replace(
+    for kind in roots:
+        col = f"{kind}_path"
+        if col not in df_new.columns:
+            continue
+        df_new[col] = df_new[col].str.replace(
             roots[kind][0], roots[kind][1], regex=False
         )
 
@@ -151,7 +154,10 @@ def main():
 
     move_plan = {}
     missing_plan = {}
-    for kind in ("fits", "mask", "hmi"):
+    for kind in roots:
+        col = f"{kind}_path"
+        if col not in src_df.columns:
+            continue
         moves, missing, already_present = build_move_list(src_df, dst_df, kind)
         move_plan[kind] = moves
         if missing:
