@@ -25,6 +25,7 @@ def main(argv):
         paths["fits_root"],
         paths["masks_root"],
         hmi_root=paths["hmi_root"],
+        aia304_root=paths["aia304_root"],
         hourly=hourly,
     )
     return 0

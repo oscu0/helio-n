@@ -15,6 +15,7 @@ This repo contains a small set of scripts to prepare data, train the U-Net, run 
 - Per-host settings are in `Config/Machine.json`. The key **must** match `socket.gethostname()`. It's possible to override the host with $MACHINE
 - Required keys:
   - `fits_root`, `masks_root`, `hmi_root`: where raw data lives
+  - `aia304_root` (optional): AIA 304 Å FITS root (set to `null` if unavailable)
   - `artifact_root`: where parquet/plots/models are written (per host)
   - `train_batch_size`, `apply_batch_size`, `chunk_size`, `max_inflight_plots`, `plot_threads`
 - Optional: `inherits` lets a host clone another entry and override only a few paths.

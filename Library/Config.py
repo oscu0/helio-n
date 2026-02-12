@@ -28,6 +28,7 @@ paths = {
     "fits_root": machine_config["fits_root"],
     "masks_root": machine_config["masks_root"],
     "hmi_root": machine_config["hmi_root"],
+    "aia304_root": machine_config.get("aia304_root"),
     "artifact_root": machine_config["artifact_root"],
 }
 

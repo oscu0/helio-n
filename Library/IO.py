@@ -122,6 +122,7 @@ def prepare_dataset(
     fits_root,
     masks_root,
     hmi_root=None,
+    aia304_root=None,
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
     hourly=True,
@@ -160,10 +161,20 @@ def prepare_dataset(
         {"key": [index_hmi(p) for p in hmi_files], "hmi_path": hmi_files}
     )
 
+    if aia304_root is not None:
+        aia304_files = glob.glob(os.path.join(aia304_root, "**", "*.fits"), recursive=True)
+    else:
+        aia304_files = []
+
+    df_aia304 = pd.DataFrame(
+        {"key": [index(p) for p in aia304_files], "aia304_path": aia304_files}
+    )
+
     # Report duplicates
     dup_fits = df_fits[df_fits.duplicated("key", keep=False)]
     dup_masks = df_masks[df_masks.duplicated("key", keep=False)]
     dup_hmi = df_hmi[df_hmi.duplicated("key", keep=False)]
+    dup_aia304 = df_aia304[df_aia304.duplicated("key", keep=False)]
 
     if not dup_fits.empty:
         print("⚠ Duplicate keys in FITS:")
@@ -174,11 +185,15 @@ def prepare_dataset(
     if not dup_hmi.empty:
         print("⚠ Duplicate keys in HMI:")
         print(dup_hmi.sort_values("key"))
+    if not dup_aia304.empty:
+        print("⚠ Duplicate keys in AIA 304:")
+        print(dup_aia304.sort_values("key"))
 
     # Keep first occurrence for simplicity
     df_fits = df_fits.drop_duplicates("key", keep="first")
     df_masks = df_masks.drop_duplicates("key", keep="first")
     df_hmi = df_hmi.drop_duplicates("key", keep="first")
+    df_aia304 = df_aia304.drop_duplicates("key", keep="first")
 
     def to_dt(series):
         cleaned = series.astype(str).str.replace(r"\D", "", regex=True)
@@ -188,9 +203,10 @@ def prepare_dataset(
         dt_minutes = pd.to_datetime(with_minutes, format="%Y%m%d%H%M", errors="coerce")
         return dt.fillna(dt_minutes)
 
-    # Full outer join of three tables
+    # Full outer join of tables
     merged = df_fits.merge(df_masks, on="key", how="outer")
     merged = merged.merge(df_hmi, on="key", how="outer")
+    merged = merged.merge(df_aia304, on="key", how="outer")
 
     if max_time_delta is not None:
         tolerance = pd.Timedelta(max_time_delta)
@@ -229,11 +245,13 @@ def prepare_dataset(
 
             fill_from_nearest(df_masks, "mask_path")
             fill_from_nearest(df_hmi, "hmi_path")
+            fill_from_nearest(df_aia304, "aia304_path")
 
     # Flags
     has_fits = merged["fits_path"].notna()
     has_mask = merged["mask_path"].notna()
     has_hmi = merged["hmi_path"].notna()
+    has_aia304 = merged["aia304_path"].notna() if "aia304_path" in merged.columns else pd.Series(False, index=merged.index)
 
     # Categories
     fits_only = merged[has_fits & ~has_mask].copy()
@@ -248,6 +266,8 @@ def prepare_dataset(
 
     # Evil pandas moment
     matches["hmi_path"] = matches["hmi_path"].fillna(np.nan).replace([np.nan], [None])
+    if "aia304_path" in matches.columns:
+        matches["aia304_path"] = matches["aia304_path"].fillna(np.nan).replace([np.nan], [None])
 
     # Convert index to the key (timestamp string) for matches
     matches.set_index(matches["key"], inplace=True, drop=True)

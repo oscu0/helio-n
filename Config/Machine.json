@@ -3,6 +3,7 @@
         "fits_root": "/Volumes/Aux Disk/mnt~sun/FITS/",
         "masks_root": "/Volumes/Aux Disk/mnt~sun/Masks/",
         "hmi_root": "/Volumes/Aux Disk/mnt~sun/HMI/",
+        "aia304_root": null,
         "artifact_root": "./Outputs/Artifacts/risc1/",
         "train_batch_size": 4,
         "train_workers": 4,
@@ -17,6 +18,7 @@
         "fits_root": "/mnt/sun/sdo/aia/L0/0193/",
         "masks_root": "/mnt/sun/sdo/helio-n/masks/chsun/0193/",
         "hmi_root": "/mnt/sun/sdo/hmi/fits/",
+        "aia304_root": "/mnt/sun/sdo/aia/L0/0304/",
         "artifact_root": "./Outputs/Artifacts/miracle/",
         "train_batch_size": 4,
         "train_workers": 8,
@@ -32,6 +34,7 @@
         "fits_root": "/home/smdc/mnt~sun/FITS/",
         "masks_root": "/home/smdc/mnt~sun/Masks/",
         "hmi_root": "/home/smdc/mnt~sun/HMI/",
+        "aia304_root": "/home/smdc/mnt~sun/AIA304/",
         "artifact_root": "./Outputs/Artifacts/miracle_mini/"
     }
 }

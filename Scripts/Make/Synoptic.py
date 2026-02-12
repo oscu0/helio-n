@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import socket
@@ -107,7 +108,10 @@ def main():
         "fits": [configs["miracle"]["fits_root"], configs["miracle_mini"]["fits_root"]],
         "mask": [configs["miracle"]["masks_root"], configs["miracle_mini"]["masks_root"]],
         "hmi": [configs["miracle"]["hmi_root"], configs["miracle_mini"]["hmi_root"]],
+        "aia304": [configs["miracle"].get("aia304_root"), configs["miracle_mini"].get("aia304_root")],
     }
+    # Drop channels whose roots are None on either side
+    roots = {k: v for k, v in roots.items() if v[0] is not None and v[1] is not None}
 
     if direction == "inplace":
         df = IO.synoptic_dataset(
