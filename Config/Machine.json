@@ -3,7 +3,7 @@
         "fits_root": "/Volumes/Aux Disk/mnt~sun/FITS/",
         "masks_root": "/Volumes/Aux Disk/mnt~sun/Masks/",
         "hmi_root": "/Volumes/Aux Disk/mnt~sun/HMI/",
-        "aia304_root": null,
+        "aia304_root": "/Volumes/Aux Disk/mnt~sun/AIA304/",
         "artifact_root": "./Outputs/Artifacts/risc1/",
         "train_batch_size": 4,
         "train_workers": 4,
