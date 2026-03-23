@@ -6,4 +6,5 @@
 - Preface your commits with "Codex: " or "Copilot: "
 - Always put imports at the top of the file or in the cell at the top of the notebook with imports
 - DO NOT add exception handling (try-except) unless I explicitly request it. Let errors fail loud. This is a research codebase where silent failures mask bugs.
+— Run code in the icme3.12-metal conda env when necessary.
 </INSTRUCTIONS>
