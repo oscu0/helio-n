@@ -207,7 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 **/.DS_Store
-Outputs/Models/**
+Outputs/**
+!Outputs/.gitkeep
 Data/Training/**
 Data/Inference/**
 *.keras
