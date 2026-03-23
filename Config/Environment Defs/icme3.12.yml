@@ -1,4 +1,4 @@
-name: icme3.12-metal
+name: icme3.12
 channels:
   - conda-forge
   - defaults
