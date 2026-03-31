@@ -1,0 +1,20 @@
+{
+    "superresolution_enabled": true,
+    "superresolution_step_minutes": 5,
+    "base_time_step_minutes": 60,
+    "phi_step_minutes": 120,
+    "cr_days": 27.0,
+    "r0": 20,
+    "r_solar_km": 700000.0,
+    "r_max": 215,
+    "horizon_hours": 168.0,
+    "use_swept_cell": true,
+    "field_half_width_h": 0.5,
+    "use_cr_reset": true,
+    "prop_stats_mode": "max_only",
+    "memory_guard_enabled": true,
+    "simulation_pad_days": 7.0,
+    "plot_phi_target": 120.0,
+    "earth_phi_target": 0.0,
+    "earth_r_target": 215.0
+}
