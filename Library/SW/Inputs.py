@@ -7,18 +7,28 @@ from tqdm.auto import tqdm
 
 import userpwd
 
+SDO_V2_HANDOFF = "2019-01-01"
+
 DEFAULT_SQL_QUERY = """
 SELECT
-    dt,
-    ch_relative_area,
-    forecast_sw_speed,
-    forecast_dt
-FROM sdo.sdo_sw_forecast_0193
-WHERE dt >= %(start_dt)s
-  AND dt < %(end_dt)s
-ORDER BY dt
+  f.dt AS dt,
+  f.forecast_dt,
+  f.forecast_sw_speed,
+  c.ch_relative_correct_sphere_area AS ch_relative_area
+FROM SDO_PREFIX.sdo_sw_forecast_0193p AS f
+LEFT JOIN SDO_PREFIX.sdo_fill_sw_193(
+  48,
+  '1h',
+  %(start_dt)s - interval '5 days',
+  %(end_dt)s
+) AS c
+  ON c.dt = f.dt
+WHERE f.forecast_dt BETWEEN %(start_dt)s AND %(end_dt)s
+ORDER BY f.forecast_dt, f.dt;
 """
 
+
+SDO_V2_HANDOFF = "2019-01-01"
 DEFAULT_SQL_CONNECTION = {
     "host": "213.131.1.41",
     "user": "selector",
@@ -27,6 +37,16 @@ DEFAULT_SQL_CONNECTION = {
 
 DEFAULT_INPUT_PARQUET_PATH = Path("Data/CH Area.parquet")
 DEFAULT_ACE_PARQUET_PATH = Path("Data/ACE At Earth 1h.parquet")
+
+
+def iter_year_windows(start_dt, end_dt):
+    chunk_start = pd.Timestamp(start_dt)
+    chunk_end_limit = pd.Timestamp(end_dt)
+    while chunk_start < chunk_end_limit:
+        next_year = pd.Timestamp(year=chunk_start.year + 1, month=1, day=1)
+        chunk_end = min(next_year, chunk_end_limit)
+        yield chunk_start, chunk_end
+        chunk_start = chunk_end
 
 
 def load_sw_input_from_parquet(input_parquet_path=DEFAULT_INPUT_PARQUET_PATH):
@@ -38,7 +58,7 @@ def load_sw_input_from_parquet(input_parquet_path=DEFAULT_INPUT_PARQUET_PATH):
 def load_sw_input_from_sql(
     start_dt,
     end_dt,
-    query=DEFAULT_SQL_QUERY,
+    query=None,
     connection_kwargs=None,
     password=None,
 ):
@@ -50,13 +70,32 @@ def load_sw_input_from_sql(
         password=userpwd.userpwd_postgre if password is None else password,
         **conn_kwargs,
     )
-    with conn.cursor() as cur:
-        cur.execute(query, {"start_dt": start_dt, "end_dt": end_dt})
-        rows = cur.fetchall()
-        columns = [desc.name for desc in cur.description]
+    frames = []
+    columns = None
+    with conn:
+        with conn.cursor() as cur:
+            for chunk_start, chunk_end in iter_year_windows(start_dt, end_dt):
+                chunk_query = query
+                if chunk_query is None:
+                    chunk_query = DEFAULT_SQL_QUERY.replace(
+                        "SDO_PREFIX",
+                        "sdo" if chunk_start < pd.Timestamp(SDO_V2_HANDOFF) else "sdo_v2",
+                    )
+                cur.execute(
+                    chunk_query,
+                    {"start_dt": chunk_start, "end_dt": chunk_end},
+                )
+                rows = cur.fetchall()
+                if columns is None:
+                    columns = [desc.name for desc in cur.description]
+                frames.append(pd.DataFrame(rows, columns=columns))
     conn.close()
 
-    return pd.DataFrame(rows, columns=columns)
+    if columns is None:
+        return pd.DataFrame()
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(frames, ignore_index=True)
 
 
 def normalize_sw_input_frame(df_input_raw, start_dt, end_dt):
@@ -75,6 +114,10 @@ def normalize_sw_input_frame(df_input_raw, start_dt, end_dt):
             df_sdo_sw["ch_relative_area"] = pd.to_numeric(
                 df_sdo_sw["ch_area"], errors="coerce"
             )
+    else:
+        df_sdo_sw["ch_relative_area"] = pd.to_numeric(
+            df_sdo_sw["ch_relative_area"], errors="coerce"
+        )
 
     if "forecast_sw_speed" not in df_sdo_sw.columns:
         if {"sw_speed_1", "sw_speed_2"}.issubset(df_sdo_sw.columns):
@@ -85,6 +128,10 @@ def normalize_sw_input_frame(df_input_raw, start_dt, end_dt):
             df_sdo_sw["forecast_sw_speed"] = pd.to_numeric(
                 df_sdo_sw["sw_speed_1"], errors="coerce"
             )
+    else:
+        df_sdo_sw["forecast_sw_speed"] = pd.to_numeric(
+            df_sdo_sw["forecast_sw_speed"], errors="coerce"
+        )
 
     df_sdo_sw = df_sdo_sw[
         (df_sdo_sw["dt"] >= start_dt) & (df_sdo_sw["dt"] < end_dt)
@@ -97,7 +144,7 @@ def load_sw_input_frame(
     end_dt,
     source="parquet",
     input_parquet_path=DEFAULT_INPUT_PARQUET_PATH,
-    query=DEFAULT_SQL_QUERY,
+    query=None,
     connection_kwargs=None,
     password=None,
 ):
