@@ -22,13 +22,9 @@ class AccumulatorState:
     """Dense accumulation arrays and flattened views used by Numba kernels."""
 
     V_accum_max: np.ndarray
-    V_accum_sum: np.ndarray | None
-    V_accum_count: np.ndarray | None
     V_accum_cr_idx: np.ndarray | None
     cr_flat: np.ndarray | None
     max_flat: np.ndarray
-    sum_flat: np.ndarray
-    count_flat: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -44,13 +40,12 @@ class PropagationStats:
 
 @dataclass(frozen=True)
 class PostProcessingState:
-    """Notebook-compatible post-processing artifacts."""
+    """Max-only post-processing artifacts."""
 
     V_grid: np.ndarray
-    post_fields_raw: dict[str, np.ndarray]
-    model_pred_mask: dict[str, np.ndarray]
-    slow_sw_pred_mask: dict[str, np.ndarray]
-    post_vlims_raw: dict[str, tuple[float, float]]
+    max_model_pred_mask: np.ndarray
+    max_slow_sw_pred_mask: np.ndarray
+    max_vlims_raw: tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -65,8 +60,6 @@ class PhiPropagationState:
 
 def init_accumulators(n_t, n_p, n_r, use_cr_reset):
     V_accum_max = np.full((n_t, n_p, n_r), np.nan, dtype=np.float32)
-    V_accum_sum = None
-    V_accum_count = None
 
     if use_cr_reset:
         V_accum_cr_idx = np.full((n_t, n_p, n_r), -1, dtype=np.int32)
@@ -77,13 +70,9 @@ def init_accumulators(n_t, n_p, n_r, use_cr_reset):
 
     return AccumulatorState(
         V_accum_max=V_accum_max,
-        V_accum_sum=V_accum_sum,
-        V_accum_count=V_accum_count,
         V_accum_cr_idx=V_accum_cr_idx,
         cr_flat=cr_flat,
         max_flat=V_accum_max.ravel(),
-        sum_flat=np.empty(1, dtype=np.float64),
-        count_flat=np.empty(1, dtype=np.uint16),
     )
 
 
@@ -749,10 +738,9 @@ def postprocess_max_field(
 
     return PostProcessingState(
         V_grid=V_grid_max_raw,
-        post_fields_raw={"max": V_grid_max_raw},
-        model_pred_mask={"max": model_pred_max},
-        slow_sw_pred_mask={"max": slow_sw_pred_max},
-        post_vlims_raw={"max": vlims},
+        max_model_pred_mask=model_pred_max,
+        max_slow_sw_pred_mask=slow_sw_pred_max,
+        max_vlims_raw=vlims,
     )
 
 
@@ -764,7 +752,6 @@ def propagate_phi_targets(
     rotation_state,
     r0,
     r_max,
-    prop_stats_mode,
     dense_memory_budget_gb,
     memory_guard_enabled,
     horizon_hours,
@@ -786,7 +773,6 @@ def propagate_phi_targets(
         phi_step=rotation_state.phi_step,
         r0=r0,
         r_max=r_max,
-        prop_stats_mode=prop_stats_mode,
         dense_memory_budget_gb=dense_memory_budget_gb,
         memory_guard_enabled=memory_guard_enabled,
         phi_values=phi_targets,
@@ -855,54 +841,3 @@ def propagate_phi_targets(
         accumulators=accumulators,
         stats=stats,
     )
-
-
-def ch_area_causal_from_model_speed(
-    model_speed_series,
-    ch_hourly_series,
-    r0,
-    r_solar_km,
-    r_target=215.0,
-):
-    if model_speed_series is None or len(model_speed_series) == 0:
-        return pd.Series(dtype=float)
-
-    src = ch_hourly_series.dropna().sort_index()
-    if len(src) == 0:
-        return pd.Series(
-            index=model_speed_series.index, dtype=float, name="ch_area_causal"
-        )
-
-    src_ns = src.index.view("int64")
-    src_vals = src.to_numpy(dtype=float)
-
-    v = model_speed_series.to_numpy(dtype=float)
-    v_ok = np.isfinite(v) & (v > 1e-6)
-
-    tau_s = np.full(v.shape, np.nan, dtype=float)
-    tau_s[v_ok] = ((float(r_target) - float(r0)) * float(r_solar_km)) / v[v_ok]
-
-    emit_time = pd.DatetimeIndex(model_speed_series.index) - pd.to_timedelta(
-        tau_s, unit="s"
-    )
-    emit_ns = emit_time.view("int64")
-
-    pos = np.searchsorted(src_ns, emit_ns, side="right") - 1
-    pos = np.clip(pos, 0, len(src_vals) - 1)
-
-    out = src_vals[pos].astype(float, copy=True)
-    out[~v_ok] = np.nan
-    return pd.Series(out, index=model_speed_series.index, name="ch_area_causal")
-
-
-def array_gib(array):
-    return float(array.nbytes) / (1024**3)
-
-
-def collect_top_arrays(namespace, top_n=20):
-    rows = []
-    for name, obj in namespace.items():
-        if isinstance(obj, np.ndarray):
-            rows.append((name, obj.dtype, obj.shape, array_gib(obj)))
-    rows.sort(key=lambda row: row[3], reverse=True)
-    return rows[:top_n]

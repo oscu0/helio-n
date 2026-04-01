@@ -54,11 +54,8 @@ def compute_rotation_state(cr_days, phi_step_minutes):
     )
 
 
-def estimate_dense_memory_gb(n_cells, prop_stats_mode):
-    if prop_stats_mode == "max_only":
-        bytes_core = int(n_cells) * 4
-    else:
-        bytes_core = int(n_cells) * (4 + 8 + 2 + 4)
+def estimate_dense_memory_gb(n_cells):
+    bytes_core = int(n_cells) * 4
     return (bytes_core * 1.6) / 1e9
 
 
@@ -78,7 +75,6 @@ def build_grid_axes(
     phi_step,
     r0,
     r_max,
-    prop_stats_mode,
     dense_memory_budget_gb,
     memory_guard_enabled,
     phi_values=None,
@@ -87,7 +83,7 @@ def build_grid_axes(
     phi_axis = resolve_phi_axis(phi_step=phi_step, phi_values=phi_values)
     r_axis = np.arange(int(r0), int(r_max) + 1, 1, dtype=np.int16)
     n_cells = int(len(time_axis) * len(phi_axis) * len(r_axis))
-    est_runtime_gb = estimate_dense_memory_gb(n_cells, prop_stats_mode=prop_stats_mode)
+    est_runtime_gb = estimate_dense_memory_gb(n_cells)
     if memory_guard_enabled:
         assert est_runtime_gb <= float(dense_memory_budget_gb), (
             f"Estimated memory {est_runtime_gb:.2f} GB exceeds budget "

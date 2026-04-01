@@ -3,11 +3,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import psycopg
-from tqdm.auto import tqdm
 
 import userpwd
-
-SDO_V2_HANDOFF = "2019-01-01"
 
 DEFAULT_SQL_QUERY = """
 SELECT
@@ -177,8 +174,6 @@ def build_model_input_series(
     empirical,
     time_controls,
     simulation_pad_days,
-    input_chunk_rows,
-    show_progress=True,
 ):
     required_cols = {"dt", "ch_relative_area"}
     assert required_cols.issubset(
@@ -196,19 +191,10 @@ def build_model_input_series(
         len(prepared_input) > 0
     ), "No valid SW input rows remain after filtering and CH-area normalization"
 
-    area_values = prepared_input["ch_relative_area"].to_numpy(dtype=float)
-    v_empirical = np.empty_like(area_values, dtype=float)
-    chunk_rows = int(input_chunk_rows)
-    iterator = range(0, len(area_values), chunk_rows)
-    if show_progress:
-        iterator = tqdm(iterator, desc="empirical v(area)", unit="rows")
-    for start in iterator:
-        stop = min(start + chunk_rows, len(area_values))
-        v_empirical[start:stop] = v_from_area(
-            area_values[start:stop], empirical=empirical
-        )
-
-    prepared_input["v_empirical"] = v_empirical
+    prepared_input["v_empirical"] = v_from_area(
+        prepared_input["ch_relative_area"].to_numpy(dtype=float),
+        empirical=empirical,
+    )
     launch_time = (prepared_input["dt"] + pd.Timedelta(minutes=30)).dt.floor("1h")
     df_v = (
         pd.DataFrame({"time": launch_time, "v": prepared_input["v_empirical"]})

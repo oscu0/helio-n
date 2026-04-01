@@ -11,7 +11,6 @@
     "use_swept_cell": true,
     "field_half_width_h": 0.5,
     "use_cr_reset": true,
-    "prop_stats_mode": "max_only",
     "memory_guard_enabled": true,
     "simulation_pad_days": 7.0,
     "plot_phi_target": 120.0,

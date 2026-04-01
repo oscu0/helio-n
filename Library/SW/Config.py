@@ -12,9 +12,7 @@ MACHINE_CONFIG_PATH = PROJECT_ROOT / "Config" / "Machine.json"
 SW_RUNTIME_DEFAULTS = {
     "dense_memory_budget_gb": 10.0,
     "max_seed_batch": 256,
-    "input_chunk_rows": 200000,
     "post_chunk_t": 128,
-    "sparse_time_chunk": 48,
     "animation_dpi": 100,
 }
 
@@ -46,7 +44,6 @@ class BallisticSpec:
     use_swept_cell: bool
     field_half_width_h: float
     use_cr_reset: bool
-    prop_stats_mode: str
     memory_guard_enabled: bool
     simulation_pad_days: float
     plot_phi_target: float
@@ -62,9 +59,7 @@ class RuntimeSpec:
     machine_name: str
     dense_memory_budget_gb: float
     max_seed_batch: int
-    input_chunk_rows: int
     post_chunk_t: int
-    sparse_time_chunk: int
     animation_dpi: int
 
 
@@ -87,25 +82,6 @@ def load_json_config(path):
         return json.load(handle)
 
 
-def load_empirical_config(path=None):
-    config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Empirical.json"
-    return load_json_config(config_path)
-
-
-def load_ballistic_config(path=None):
-    config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Ballistic.json"
-    return load_json_config(config_path)
-
-
-def load_sw_runtime_config(current_machine_config=None):
-    runtime = dict(SW_RUNTIME_DEFAULTS)
-    machine = (
-        machine_config if current_machine_config is None else current_machine_config
-    )
-    runtime.update(machine.get("sw", {}))
-    return runtime
-
-
 def _resolved_machine_name():
     candidate = override_machine if override_machine else hostname
     if candidate in machines:
@@ -115,7 +91,7 @@ def _resolved_machine_name():
 
 def load_empirical_spec(path=None):
     config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Empirical.json"
-    raw = load_empirical_config(config_path)
+    raw = load_json_config(config_path)
     return EmpiricalSpec(
         json_path=config_path,
         slow_sw_speed=float(raw["slow_sw_speed"]),
@@ -126,7 +102,7 @@ def load_empirical_spec(path=None):
 
 def load_ballistic_spec(path=None):
     config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Ballistic.json"
-    raw = load_ballistic_config(config_path)
+    raw = load_json_config(config_path)
     return BallisticSpec(
         json_path=config_path,
         superresolution_enabled=bool(raw["superresolution_enabled"]),
@@ -141,7 +117,6 @@ def load_ballistic_spec(path=None):
         use_swept_cell=bool(raw["use_swept_cell"]),
         field_half_width_h=float(raw["field_half_width_h"]),
         use_cr_reset=bool(raw["use_cr_reset"]),
-        prop_stats_mode=str(raw["prop_stats_mode"]),
         memory_guard_enabled=bool(raw["memory_guard_enabled"]),
         simulation_pad_days=float(raw["simulation_pad_days"]),
         plot_phi_target=float(raw["plot_phi_target"]),
@@ -151,7 +126,11 @@ def load_ballistic_spec(path=None):
 
 
 def load_sw_runtime_spec(current_machine_config=None, machine_name=None):
-    runtime = load_sw_runtime_config(current_machine_config=current_machine_config)
+    runtime = dict(SW_RUNTIME_DEFAULTS)
+    machine = (
+        machine_config if current_machine_config is None else current_machine_config
+    )
+    runtime.update(machine.get("sw", {}))
     resolved_machine_name = (
         _resolved_machine_name()
         if current_machine_config is None and machine_name is None
@@ -162,9 +141,7 @@ def load_sw_runtime_spec(current_machine_config=None, machine_name=None):
         machine_name=resolved_machine_name,
         dense_memory_budget_gb=float(runtime["dense_memory_budget_gb"]),
         max_seed_batch=int(runtime["max_seed_batch"]),
-        input_chunk_rows=int(runtime["input_chunk_rows"]),
         post_chunk_t=int(runtime["post_chunk_t"]),
-        sparse_time_chunk=int(runtime["sparse_time_chunk"]),
         animation_dpi=int(runtime["animation_dpi"]),
     )
 

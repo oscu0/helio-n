@@ -151,7 +151,6 @@ def main(argv):
         empirical=empirical,
         time_controls=time_controls,
         simulation_pad_days=ballistic.simulation_pad_days,
-        input_chunk_rows=runtime.input_chunk_rows,
     )
 
     rotation = compute_rotation_state(
@@ -165,7 +164,6 @@ def main(argv):
         phi_step=rotation.phi_step,
         r0=ballistic.r0,
         r_max=ballistic.r_max,
-        prop_stats_mode=ballistic.prop_stats_mode,
         dense_memory_budget_gb=runtime.dense_memory_budget_gb,
         memory_guard_enabled=ballistic.memory_guard_enabled,
     )
@@ -257,15 +255,11 @@ def main(argv):
         time_axis=grid.time_axis,
         phi_axis=grid.phi_axis,
         r_axis=grid.r_axis,
-        grid_raw=post.post_fields_raw["max"],
-        slow_sw_pred_mask=post.slow_sw_pred_mask["max"],
+        grid_raw=post.V_grid,
+        slow_sw_pred_mask=post.max_slow_sw_pred_mask,
         slow_sw_speed=empirical.slow_sw_speed,
-        r0=ballistic.r0,
-        r_solar_km=ballistic.r_solar_km,
         df_ace_earth=df_ace_earth,
         df_forecast_earth=df_forecast_earth,
-        df_ch_area_hourly=prepared["df_ch_area_hourly"],
-        df_ch_area=prepared["df_ch_area"],
         phi_target=ballistic.earth_phi_target,
         r_target=ballistic.earth_r_target,
         draw_slow_sw=True,
@@ -279,9 +273,9 @@ def main(argv):
             time_axis=grid.time_axis,
             phi_axis=grid.phi_axis,
             r_axis=grid.r_axis,
-            grid_raw=post.post_fields_raw["max"],
-            post_vlims_raw=post.post_vlims_raw,
-            slow_sw_pred_mask=post.slow_sw_pred_mask,
+            grid_raw=post.V_grid,
+            post_vlims_raw=post.max_vlims_raw,
+            slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             earth_frame=earth_frame,
             time_step_minutes=time_controls.time_step_minutes,
             superresolution_enabled=time_controls.superresolution_enabled,
@@ -290,7 +284,6 @@ def main(argv):
             cr_days=ballistic.cr_days,
             draw_slow_sw=True,
             backfill_empty_with_300=False,
-            post_mode="max",
             anim_fps=args.animation_fps,
             anim_dpi=(
                 runtime.animation_dpi

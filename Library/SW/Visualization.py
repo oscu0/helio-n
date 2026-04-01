@@ -7,12 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from Library.SW.Ballistic import ch_area_causal_from_model_speed
 from Library.SW.Coords import find_axis_index
-
-
-def ensure_post_mode(post_mode):
-    assert post_mode == "max", "Only max mode is enabled"
 
 
 def ensure_even_frame_size(fig, dpi):
@@ -27,36 +22,6 @@ def ensure_even_frame_size(fig, dpi):
     return fig_w_px, fig_h_px
 
 
-def plot_time_radius_slice(
-    time_axis,
-    phi_axis,
-    r_axis,
-    V_grid,
-    phi_target,
-):
-    phi_idx = find_axis_index(phi_axis, target=phi_target)
-    slice_tr = V_grid[:, phi_idx, :]
-    ti, ri = np.where(~np.isnan(slice_tr))
-
-    plt.figure(figsize=(10, 5))
-    scatter = plt.scatter(
-        r_axis[ri],
-        time_axis[ti],
-        c=slice_tr[ti, ri],
-        cmap="plasma",
-        s=8,
-        alpha=0.9,
-    )
-    plt.colorbar(scatter, label="v (km/s)")
-    plt.xlabel("R (Rsun)")
-    plt.ylabel("t")
-    axis = plt.gca()
-    axis.yaxis.set_major_locator(mdates.AutoDateLocator())
-    axis.yaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    plt.tight_layout()
-    plt.show()
-
-
 def build_earth_comparison_frame(
     time_axis,
     phi_axis,
@@ -64,12 +29,8 @@ def build_earth_comparison_frame(
     grid_raw,
     slow_sw_pred_mask,
     slow_sw_speed,
-    r0,
-    r_solar_km,
     df_ace_earth=None,
     df_forecast_earth=None,
-    df_ch_area_hourly=None,
-    df_ch_area=None,
     phi_target=0.0,
     r_target=215.0,
     draw_slow_sw=True,
@@ -98,27 +59,6 @@ def build_earth_comparison_frame(
         {"v_model_earth_raw": model_series_raw, "v_model_earth": model_series}
     )
 
-    ch_area_causal_series = None
-    if (
-        df_ch_area_hourly is not None
-        and "ch_relative_area" in df_ch_area_hourly.columns
-    ):
-        ch_area_causal_series = ch_area_causal_from_model_speed(
-            model_speed_series=model_series_raw,
-            ch_hourly_series=df_ch_area_hourly["ch_relative_area"],
-            r0=r0,
-            r_solar_km=r_solar_km,
-            r_target=r_target,
-        )
-    elif df_ch_area is not None and "ch_relative_area" in df_ch_area.columns:
-        ch_area_causal_series = ch_area_causal_from_model_speed(
-            model_speed_series=model_series_raw,
-            ch_hourly_series=df_ch_area["ch_relative_area"],
-            r0=r0,
-            r_solar_km=r_solar_km,
-            r_target=r_target,
-        )
-
     if df_ace_earth is not None and "v_ace" in df_ace_earth.columns:
         earth_frame = earth_frame.join(df_ace_earth[["v_ace"]], how="outer")
     if (
@@ -127,10 +67,6 @@ def build_earth_comparison_frame(
     ):
         earth_frame = earth_frame.join(
             df_forecast_earth[["forecast_sw_speed"]], how="outer"
-        )
-    if ch_area_causal_series is not None:
-        earth_frame = earth_frame.join(
-            ch_area_causal_series.rename("ch_area_causal"), how="outer"
         )
 
     return earth_frame.sort_index()
@@ -144,17 +80,12 @@ def plot_polar_snapshot(
     grid_raw,
     post_vlims_raw,
     slow_sw_pred_mask,
-    earth_frame,
     time_step_hours,
     slow_sw_speed,
     r0,
-    cr_days,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
-    post_mode="max",
 ):
-    ensure_post_mode(post_mode)
-
     current_time = pd.Timestamp(date_str)
     t0_ref = time_axis[0]
     t_idx = int((current_time - t0_ref) / pd.Timedelta(hours=float(time_step_hours)))
@@ -162,13 +93,12 @@ def plot_polar_snapshot(
     raw_slice_pr = grid_raw[t_idx, :, :]
     if backfill_empty_with_300:
         slice_pr = np.where(np.isnan(raw_slice_pr), float(slow_sw_speed), raw_slice_pr)
-        vmin_mode, vmax_mode = float(slow_sw_speed), post_vlims_raw[post_mode][1]
+        vmin_mode, vmax_mode = float(slow_sw_speed), post_vlims_raw[1]
     else:
         slice_pr = raw_slice_pr
-        vmin_mode, vmax_mode = post_vlims_raw[post_mode]
+        vmin_mode, vmax_mode = post_vlims_raw
 
-    pred_slow = slow_sw_pred_mask[post_mode]
-    slice_pred_slow = pred_slow[t_idx, :, :]
+    slice_pred_slow = slow_sw_pred_mask[t_idx, :, :]
 
     plot_mask = ~np.isnan(slice_pr)
     if not draw_slow_sw:
@@ -183,18 +113,9 @@ def plot_polar_snapshot(
     radius = r_axis[ri].astype(float)
     colors = slice_pr[pi, ri].astype(float)
 
-    window_before_days = float(cr_days - 7.0)
-    window_after_days = 7.0
-    window_start = current_time - pd.Timedelta(days=window_before_days)
-    window_end = current_time + pd.Timedelta(days=window_after_days)
-    earth_window = earth_frame.loc[window_start:window_end]
-
-    fig = plt.figure(figsize=(8.2, 10.6))
-    grid_spec = fig.add_gridspec(3, 1, height_ratios=[3.3, 1.55, 1.1], hspace=0.4)
-    ax = fig.add_subplot(grid_spec[0], projection="polar")
-    ax_earth = fig.add_subplot(grid_spec[1])
-    ax_area = fig.add_subplot(grid_spec[2])
-    fig.subplots_adjust(top=0.68, right=0.86)
+    fig = plt.figure(figsize=(7.2, 7.2))
+    ax = fig.add_subplot(111, projection="polar")
+    fig.subplots_adjust(top=0.84, right=0.86)
 
     scatter = ax.scatter(
         phi_rad,
@@ -209,7 +130,7 @@ def plot_polar_snapshot(
     colorbar = plt.colorbar(scatter, ax=ax, pad=0.14, fraction=0.05)
     colorbar.set_label("v (km/s)")
 
-    ax.set_title(f"phi-R ({post_mode}) at {date_str}", y=1.14, pad=0)
+    ax.set_title(f"phi-R at {date_str}", y=1.14, pad=0)
     ax.text(
         0.5,
         1.06,
@@ -250,174 +171,6 @@ def plot_polar_snapshot(
         ),
     )
 
-    if "v_model_earth" in earth_window.columns:
-        ax_earth.plot(
-            earth_window.index,
-            earth_window["v_model_earth"].values,
-            color="tab:orange",
-            linewidth=1.4,
-            label="v model @ (R=215, phi=0)",
-        )
-    if "v_ace" in earth_window.columns:
-        ax_earth.plot(
-            earth_window.index,
-            earth_window["v_ace"].values,
-            color="tab:blue",
-            linewidth=1.1,
-            alpha=0.9,
-            label="v_ace",
-        )
-    if "forecast_sw_speed" in earth_window.columns:
-        ax_earth.plot(
-            earth_window.index,
-            earth_window["forecast_sw_speed"].values,
-            color="tab:green",
-            linewidth=1.1,
-            alpha=0.9,
-            label="forecast_sw_speed",
-        )
-    ax_earth.axvline(
-        current_time, color="black", linestyle="--", linewidth=1.0, alpha=0.7
-    )
-    ax_earth.set_xlim(window_start, window_end)
-    ax_earth.set_ylabel("v (km/s)")
-    ax_earth.set_title(
-        f"Earth Running Window: t-{window_before_days:.0f}d to t+{window_after_days:.0f}d",
-        fontsize=10,
-    )
-    ax_earth.grid(alpha=0.25)
-    ax_earth.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax_earth.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
-    ax_earth.legend(loc="upper left", fontsize=8)
-
-    plotted_ch = False
-    if "ch_area_causal" in earth_window.columns:
-        y_ch = earth_window["ch_area_causal"].to_numpy(dtype=float)
-        if np.any(np.isfinite(y_ch)):
-            ax_area.step(
-                earth_window.index,
-                y_ch,
-                where="post",
-                color="tab:brown",
-                linewidth=1.2,
-                label="CH area (causal, hourly step)",
-            )
-            plotted_ch = True
-    ax_area.axvline(
-        current_time, color="black", linestyle="--", linewidth=1.0, alpha=0.7
-    )
-    ax_area.set_xlim(window_start, window_end)
-    ax_area.set_ylabel("CH area")
-    ax_area.set_title(
-        "Source CH Area Causing Parcel (Ballistic Lag, Hourly Stepwise)",
-        fontsize=10,
-    )
-    ax_area.grid(alpha=0.25)
-    ax_area.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax_area.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
-    if plotted_ch:
-        ax_area.legend(loc="upper left", fontsize=8)
-    else:
-        ax_area.text(
-            0.01,
-            0.92,
-            "No causal CH-area data in this window",
-            transform=ax_area.transAxes,
-            fontsize=8,
-            color="dimgray",
-        )
-
-    plt.show()
-
-
-def plot_full_range_earth_comparison(
-    time_axis,
-    earth_frame,
-    slow_sw_speed,
-):
-    fig = plt.figure(figsize=(12.0, 6.6))
-    grid_spec = fig.add_gridspec(2, 1, height_ratios=[2.25, 1.0], hspace=0.33)
-    ax = fig.add_subplot(grid_spec[0])
-    ax_area = fig.add_subplot(grid_spec[1], sharex=ax)
-
-    if "v_model_earth" in earth_frame.columns:
-        ax.scatter(
-            earth_frame.index,
-            earth_frame["v_model_earth"].values,
-            color="tab:orange",
-            linewidth=1.3,
-            label="v_model (max) @ (R=215, phi=0)",
-            s=0.7,
-        )
-    if "v_ace" in earth_frame.columns:
-        ax.scatter(
-            earth_frame.index,
-            earth_frame["v_ace"].values,
-            color="tab:blue",
-            linewidth=1.0,
-            alpha=0.9,
-            label="v_ace",
-            s=0.7,
-        )
-    if "forecast_sw_speed" in earth_frame.columns:
-        ax.scatter(
-            earth_frame.index,
-            earth_frame["forecast_sw_speed"].values,
-            color="tab:green",
-            linewidth=1.0,
-            alpha=0.9,
-            label="forecast_sw_speed",
-            s=0.7,
-        )
-    ax.set_xlim(time_axis.min(), time_axis.max())
-    ax.set_ylabel("v (km/s)")
-    ax.set_title("Earth Velocity Comparison (Full Time Range)")
-    ax.grid(alpha=0.25)
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    ax.hlines(
-        float(slow_sw_speed),
-        color="red",
-        linestyle="--",
-        linewidth=1.0,
-        alpha=0.7,
-        label="slow SW speed",
-        xmin=time_axis.min(),
-        xmax=time_axis.max(),
-    )
-    ax.legend(loc="upper right", fontsize=9)
-
-    plotted_ch = False
-    if "ch_area_causal" in earth_frame.columns:
-        y_ch = earth_frame["ch_area_causal"].to_numpy(dtype=float)
-        if np.any(np.isfinite(y_ch)):
-            ax_area.step(
-                earth_frame.index,
-                y_ch,
-                where="post",
-                color="tab:brown",
-                linewidth=1.2,
-                label="CH area (causal, hourly step)",
-            )
-            plotted_ch = True
-    ax_area.set_ylabel("CH area")
-    ax_area.set_title("Source CH Area Causing Parcel (Full Time Range)")
-    ax_area.grid(alpha=0.25)
-    ax_area.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax_area.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
-    if plotted_ch:
-        ax_area.legend(loc="upper right", fontsize=9)
-    else:
-        ax_area.text(
-            0.01,
-            0.92,
-            "No causal CH-area data",
-            transform=ax_area.transAxes,
-            fontsize=8,
-            color="dimgray",
-        )
-
-    plt.tight_layout()
     plt.show()
 
 
@@ -437,7 +190,6 @@ def export_polar_animation(
     cr_days,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
-    post_mode="max",
     target_speedup_vs_baseline=10.0,
     baseline_fps=12.0,
     anim_fps=30,
@@ -447,7 +199,6 @@ def export_polar_animation(
     anim_plot_style="mesh",
     show_progress=True,
 ):
-    ensure_post_mode(post_mode)
     assert anim_plot_style in {"mesh", "scatter"}
 
     output_path = Path(anim_outfile)
@@ -476,11 +227,10 @@ def export_polar_animation(
     achieved_speedup = (anim_stride * float(anim_fps)) / float(baseline_fps)
 
     if backfill_empty_with_300:
-        anim_vmin, anim_vmax = float(slow_sw_speed), post_vlims_raw[post_mode][1]
+        anim_vmin, anim_vmax = float(slow_sw_speed), post_vlims_raw[1]
     else:
-        anim_vmin, anim_vmax = post_vlims_raw[post_mode]
+        anim_vmin, anim_vmax = post_vlims_raw
 
-    anim_pred_slow = slow_sw_pred_mask[post_mode]
     frame_idx = np.arange(0, len(time_axis), anim_stride, dtype=np.int32)
     window_before_days = float(cr_days - 7.0)
     window_after_days = 7.0
@@ -517,7 +267,7 @@ def export_polar_animation(
     if backfill_empty_with_300:
         np.nan_to_num(frame_buf_2d, copy=False, nan=float(slow_sw_speed))
     if not draw_slow_sw:
-        frame_buf_2d[anim_pred_slow[init_t].T] = np.nan
+        frame_buf_2d[slow_sw_pred_mask[init_t].T] = np.nan
 
     if anim_plot_style == "mesh":
         theta = np.deg2rad(phi_axis.astype(np.float32))
@@ -628,7 +378,7 @@ def export_polar_animation(
     ax_earth.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
     ax_earth.legend(loc="upper left", fontsize=8)
 
-    fig_w_px, fig_h_px = ensure_even_frame_size(fig, dpi=int(anim_dpi))
+    ensure_even_frame_size(fig, dpi=int(anim_dpi))
 
     writer = animation.FFMpegWriter(
         fps=int(anim_fps),
@@ -653,13 +403,13 @@ def export_polar_animation(
         for t_idx in iterator:
             ti = int(t_idx)
             t_cur = time_axis[ti]
-            title.set_text(f"phi-R ({post_mode}) at {t_cur}")
+            title.set_text(f"phi-R at {t_cur}")
 
             np.copyto(frame_buf_2d, grid_raw[ti].T)
             if backfill_empty_with_300:
                 np.nan_to_num(frame_buf_2d, copy=False, nan=float(slow_sw_speed))
             if not draw_slow_sw:
-                frame_buf_2d[anim_pred_slow[ti].T] = np.nan
+                frame_buf_2d[slow_sw_pred_mask[ti].T] = np.nan
 
             if anim_plot_style == "mesh":
                 artist.set_array(frame_buf_2d.ravel())

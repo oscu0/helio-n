@@ -16,9 +16,7 @@
         "sw": {
             "dense_memory_budget_gb": 10.0,
             "max_seed_batch": 256,
-            "input_chunk_rows": 200000,
             "post_chunk_t": 128,
-            "sparse_time_chunk": 48,
             "animation_dpi": 100
         }
     },
@@ -39,9 +37,7 @@
         "sw": {
             "dense_memory_budget_gb": 64.0,
             "max_seed_batch": 2048,
-            "input_chunk_rows": 200000,
             "post_chunk_t": 512,
-            "sparse_time_chunk": 192,
             "animation_dpi": 128
         }
     },
