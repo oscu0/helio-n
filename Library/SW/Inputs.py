@@ -166,7 +166,7 @@ def load_sw_input_frame(
 
 def v_from_area(area, empirical):
     values = np.asarray(area, dtype=float)
-    speed = empirical.v_min + empirical.a * (values**empirical.alpha)
+    speed = empirical.slow_sw_speed + empirical.a * (values**empirical.alpha)
     if isinstance(area, pd.Series):
         return pd.Series(speed, index=area.index, name="v_empirical")
     return speed

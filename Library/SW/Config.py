@@ -25,7 +25,6 @@ class EmpiricalSpec:
 
     json_path: Path
     slow_sw_speed: float
-    v_min: float
     a: float
     alpha: float
 
@@ -120,7 +119,6 @@ def load_empirical_spec(path=None):
     return EmpiricalSpec(
         json_path=config_path,
         slow_sw_speed=float(raw["slow_sw_speed"]),
-        v_min=float(raw["v_min"]),
         a=float(raw["a"]),
         alpha=float(raw["alpha"]),
     )
