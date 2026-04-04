@@ -6,6 +6,8 @@
 - Preface your commits with "Codex: " or "Copilot: "
 - Always put imports at the top of the file or in the cell at the top of the notebook with imports
 - DO NOT add exception handling (try-except) unless I explicitly request it. Let errors fail loud. This is a research codebase where silent failures mask bugs.
+- Use the simplest structure that matches current use, and do not introduce abstractions, indirection, or helper layers ahead of real reuse unless I explicitly ask for them.
+- Do not futureproof at the cost of readability or iteration speed; prefer clear, direct code and tolerate small local repetition, but still factor out logic once it becomes genuinely shared or meaningfully error-prone.
 - When running code, try `icme3.12-cuda`, then `icme3.12-metal`, then `icme3.12`; use whichever exists, but prefer the accelerated envs over the CPU-only one.
 - In notebooks, prefer Jupyter's rich display for dataframe/list previews; when leaving a preview object at the end of a cell, do not add `.head()` unless there is a specific reason. This does not apply to `print()`.
 </INSTRUCTIONS>
