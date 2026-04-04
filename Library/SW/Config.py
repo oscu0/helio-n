@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from Library.Config import hostname, machine_config, machines, override_machine
+from Library.SW.CH_SW_Model import CHSWModel
 
 MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MODULE_DIR.parent.parent
 SW_CONFIG_DIR = PROJECT_ROOT / "Config" / "SW"
+SW_MODEL_DIR = PROJECT_ROOT / "Models" / "CH_SW_Correspondence"
 MACHINE_CONFIG_PATH = PROJECT_ROOT / "Config" / "Machine.json"
 
 SW_RUNTIME_DEFAULTS = {
@@ -15,17 +17,6 @@ SW_RUNTIME_DEFAULTS = {
     "post_chunk_t": 128,
     "animation_dpi": 100,
 }
-
-
-@dataclass(frozen=True)
-class EmpiricalSpec:
-    """Typed view of Config/SW/Empirical.json."""
-
-    json_path: Path
-    slow_sw_speed: float
-    a: float
-    alpha: float
-
 
 @dataclass(frozen=True)
 class BallisticSpec:
@@ -90,14 +81,8 @@ def _resolved_machine_name():
 
 
 def load_empirical_spec(path=None):
-    config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Empirical.json"
-    raw = load_json_config(config_path)
-    return EmpiricalSpec(
-        json_path=config_path,
-        slow_sw_speed=float(raw["slow_sw_speed"]),
-        a=float(raw["a"]),
-        alpha=float(raw["alpha"]),
-    )
+    config_path = Path(path) if path is not None else SW_MODEL_DIR / "Shugay.py"
+    return CHSWModel.load(config_path)
 
 
 def load_ballistic_spec(path=None):
