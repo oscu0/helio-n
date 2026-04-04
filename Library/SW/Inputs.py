@@ -161,8 +161,8 @@ def load_sw_input_frame(
     return normalize_sw_input_frame(df_input_raw, start_dt=start_dt, end_dt=end_dt)
 
 
-def v_from_area(area, empirical):
-    return empirical.v_from_area(area)
+def v_from_area(area, empirical, t=None):
+    return empirical.v_from_area(area, t=t)
 
 
 def build_model_input_series(
@@ -188,11 +188,12 @@ def build_model_input_series(
         len(prepared_input) > 0
     ), "No valid SW input rows remain after filtering and CH-area normalization"
 
+    launch_time = (prepared_input["dt"] + pd.Timedelta(minutes=30)).dt.floor("1h")
     prepared_input["v_empirical"] = v_from_area(
         prepared_input["ch_relative_area"].to_numpy(dtype=float),
         empirical=empirical,
+        t=launch_time,
     )
-    launch_time = (prepared_input["dt"] + pd.Timedelta(minutes=30)).dt.floor("1h")
     df_v = (
         pd.DataFrame({"time": launch_time, "v": prepared_input["v_empirical"]})
         .groupby("time", as_index=True)["v"]

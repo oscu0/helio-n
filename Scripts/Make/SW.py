@@ -253,7 +253,7 @@ def main(argv):
 
     post = postprocess_max_field(
         V_accum_max=accumulators.V_accum_max,
-        slow_sw_speed=empirical.v_min_value(),
+        slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
         post_chunk_t=runtime["post_chunk_t"],
     )
     df_ace_earth = load_ace_at_earth()
@@ -264,7 +264,7 @@ def main(argv):
         r_axis=grid.r_axis,
         grid_raw=post.V_grid,
         slow_sw_pred_mask=post.max_slow_sw_pred_mask,
-        slow_sw_speed=empirical.v_min_value(),
+        slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
         df_ace_earth=df_ace_earth,
         df_forecast_earth=df_forecast_earth,
         phi_target=ballistic["earth_phi_target"],
@@ -286,7 +286,7 @@ def main(argv):
             earth_frame=earth_frame,
             time_step_minutes=time_step_minutes,
             superresolution_enabled=superresolution_enabled,
-            slow_sw_speed=empirical.v_min_value(),
+            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
             r0=ballistic["r0"],
             cr_days=ballistic["cr_days"],
             draw_slow_sw=True,

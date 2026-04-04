@@ -10,6 +10,14 @@ from tqdm.auto import tqdm
 from Library.SW.Coords import find_axis_index
 
 
+def resolve_slow_sw_speed(time_axis, slow_sw_speed):
+    values = np.asarray(slow_sw_speed, dtype=float)
+    if values.ndim == 0:
+        values = np.full(len(time_axis), float(values))
+    assert len(values) == len(time_axis)
+    return pd.Series(values, index=pd.DatetimeIndex(time_axis), name="slow_sw_speed")
+
+
 def ensure_even_frame_size(fig, dpi):
     """Adjust figure inches so rasterized output lands on even pixel counts."""
     fig_w_px = int(fig.get_figwidth() * int(dpi))
@@ -36,6 +44,7 @@ def build_earth_comparison_frame(
     draw_slow_sw=True,
     backfill_empty_with_300=False,
 ):
+    slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     phi_idx = find_axis_index(phi_axis, target=phi_target)
     r_idx = find_axis_index(r_axis, target=r_target)
 
@@ -45,9 +54,7 @@ def build_earth_comparison_frame(
         name="v_model_earth_raw",
     )
     if backfill_empty_with_300:
-        model_series = model_series_raw.fillna(float(slow_sw_speed)).rename(
-            "v_model_earth"
-        )
+        model_series = model_series_raw.fillna(slow_sw_series).rename("v_model_earth")
     else:
         model_series = model_series_raw.rename("v_model_earth")
 
@@ -86,14 +93,16 @@ def plot_polar_snapshot(
     draw_slow_sw=True,
     backfill_empty_with_300=False,
 ):
+    slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     current_time = pd.Timestamp(date_str)
     t0_ref = time_axis[0]
     t_idx = int((current_time - t0_ref) / pd.Timedelta(hours=float(time_step_hours)))
+    slow_sw_value = float(slow_sw_series.iloc[t_idx])
 
     raw_slice_pr = grid_raw[t_idx, :, :]
     if backfill_empty_with_300:
-        slice_pr = np.where(np.isnan(raw_slice_pr), float(slow_sw_speed), raw_slice_pr)
-        vmin_mode, vmax_mode = float(slow_sw_speed), post_vlims_raw[1]
+        slice_pr = np.where(np.isnan(raw_slice_pr), slow_sw_value, raw_slice_pr)
+        vmin_mode, vmax_mode = slow_sw_value, post_vlims_raw[1]
     else:
         slice_pr = raw_slice_pr
         vmin_mode, vmax_mode = post_vlims_raw
@@ -200,6 +209,7 @@ def export_polar_animation(
     show_progress=True,
 ):
     assert anim_plot_style in {"mesh", "scatter"}
+    slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
 
     output_path = Path(anim_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +237,7 @@ def export_polar_animation(
     achieved_speedup = (anim_stride * float(anim_fps)) / float(baseline_fps)
 
     if backfill_empty_with_300:
-        anim_vmin, anim_vmax = float(slow_sw_speed), post_vlims_raw[1]
+        anim_vmin, anim_vmax = float(slow_sw_series.min()), post_vlims_raw[1]
     else:
         anim_vmin, anim_vmax = post_vlims_raw
 
@@ -263,9 +273,10 @@ def export_polar_animation(
 
     frame_buf_2d = np.empty((len(r_axis), len(phi_axis)), dtype=np.float32)
     init_t = int(frame_idx[0])
+    init_slow_sw = float(slow_sw_series.iloc[init_t])
     np.copyto(frame_buf_2d, grid_raw[init_t].T)
     if backfill_empty_with_300:
-        np.nan_to_num(frame_buf_2d, copy=False, nan=float(slow_sw_speed))
+        np.nan_to_num(frame_buf_2d, copy=False, nan=init_slow_sw)
     if not draw_slow_sw:
         frame_buf_2d[slow_sw_pred_mask[init_t].T] = np.nan
 
@@ -356,13 +367,14 @@ def export_polar_animation(
         (forecast_line,) = ax_earth.plot(
             [], [], color="tab:green", linewidth=1.1, alpha=0.9, label="v_sw_predict"
         )
-    ax_earth.axhline(
-        float(slow_sw_speed),
+    (slow_sw_line,) = ax_earth.plot(
+        slow_sw_series.index,
+        slow_sw_series.values,
         color="red",
         linestyle="--",
         linewidth=1.0,
         alpha=0.8,
-        label=f"slow SW = {float(slow_sw_speed):.0f} km/s",
+        label="slow SW",
     )
     line_t = ax_earth.axvline(
         time_axis[init_t], color="black", linestyle="--", linewidth=1.0, alpha=0.7
@@ -403,11 +415,12 @@ def export_polar_animation(
         for t_idx in iterator:
             ti = int(t_idx)
             t_cur = time_axis[ti]
+            slow_sw_value = float(slow_sw_series.iloc[ti])
             title.set_text(f"phi-R at {t_cur}")
 
             np.copyto(frame_buf_2d, grid_raw[ti].T)
             if backfill_empty_with_300:
-                np.nan_to_num(frame_buf_2d, copy=False, nan=float(slow_sw_speed))
+                np.nan_to_num(frame_buf_2d, copy=False, nan=slow_sw_value)
             if not draw_slow_sw:
                 frame_buf_2d[slow_sw_pred_mask[ti].T] = np.nan
 
@@ -429,6 +442,8 @@ def export_polar_animation(
                 forecast_line.set_data(
                     earth_window.index, earth_window["forecast_sw_speed"].values
                 )
+            slow_sw_window = slow_sw_series.loc[window_start:window_end]
+            slow_sw_line.set_data(slow_sw_window.index, slow_sw_window.values)
 
             line_t.set_xdata([t_cur, t_cur])
             ax_earth.set_xlim(window_start, window_end)

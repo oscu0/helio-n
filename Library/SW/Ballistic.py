@@ -712,6 +712,10 @@ def postprocess_max_field(
 ):
     V_grid_max_raw = V_accum_max.copy()
     chunk_t = max(1, int(post_chunk_t))
+    slow_sw_values = np.asarray(slow_sw_speed, dtype=float)
+    if slow_sw_values.ndim == 0:
+        slow_sw_values = np.full(V_grid_max_raw.shape[0], float(slow_sw_values))
+    assert len(slow_sw_values) == V_grid_max_raw.shape[0]
 
     model_pred_max = np.zeros_like(V_grid_max_raw, dtype=bool)
     slow_sw_pred_max = np.zeros_like(V_grid_max_raw, dtype=bool)
@@ -724,7 +728,8 @@ def postprocess_max_field(
         t1 = min(t0 + chunk_t, V_grid_max_raw.shape[0])
         slab = V_grid_max_raw[t0:t1]
         pred = ~np.isnan(slab)
-        slow = pred & (slab == float(slow_sw_speed))
+        slow_ref = slow_sw_values[t0:t1, None, None]
+        slow = pred & np.isclose(slab, slow_ref)
         model_pred_max[t0:t1] = pred
         slow_sw_pred_max[t0:t1] = slow
 
