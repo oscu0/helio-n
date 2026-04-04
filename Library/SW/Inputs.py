@@ -168,7 +168,8 @@ def v_from_area(area, empirical):
 def build_model_input_series(
     sdo_input_df,
     empirical,
-    time_controls,
+    superresolution_enabled,
+    time_freq,
     simulation_pad_days,
 ):
     required_cols = {"dt", "ch_relative_area"}
@@ -213,11 +214,11 @@ def build_model_input_series(
         .sort_index()
     )
 
-    if time_controls.superresolution_enabled:
+    if superresolution_enabled:
         sr_index = pd.date_range(
-            df_v.index.min().floor(time_controls.time_freq),
-            df_v.index.max().ceil(time_controls.time_freq),
-            freq=time_controls.time_freq,
+            df_v.index.min().floor(time_freq),
+            df_v.index.max().ceil(time_freq),
+            freq=time_freq,
         )
         df_v = df_v.reindex(sr_index).interpolate(method="time").ffill().bfill()
         df_ch_area = df_ch_area_hourly.reindex(sr_index).ffill().bfill()
@@ -227,9 +228,9 @@ def build_model_input_series(
     else:
         df_ch_area = df_ch_area_hourly.copy()
 
-    sim_start = df_v.index.min().floor(time_controls.time_freq)
+    sim_start = df_v.index.min().floor(time_freq)
     sim_end = (df_v.index.max() + pd.Timedelta(days=float(simulation_pad_days))).ceil(
-        time_controls.time_freq
+        time_freq
     )
 
     return {

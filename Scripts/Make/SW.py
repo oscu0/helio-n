@@ -20,7 +20,6 @@ from Library.SW.Config import (  # noqa: E402
     load_ballistic_spec,
     load_empirical_spec,
     load_sw_runtime_spec,
-    resolve_time_controls,
 )
 from Library.SW.Coords import (  # noqa: E402
     build_grid_axes,
@@ -122,7 +121,14 @@ def main(argv):
     empirical = load_empirical_spec()
     ballistic = load_ballistic_spec()
     runtime = load_sw_runtime_spec()
-    time_controls = resolve_time_controls(ballistic)
+    superresolution_enabled = bool(ballistic["superresolution_enabled"])
+    time_step_minutes = (
+        int(ballistic["superresolution_step_minutes"])
+        if superresolution_enabled
+        else int(ballistic["base_time_step_minutes"])
+    )
+    time_step_hours = float(time_step_minutes) / 60.0
+    time_freq = f"{int(time_step_minutes)}min"
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -149,32 +155,33 @@ def main(argv):
     prepared = build_model_input_series(
         sdo_input_df=df_sdo_sw,
         empirical=empirical,
-        time_controls=time_controls,
-        simulation_pad_days=ballistic.simulation_pad_days,
+        superresolution_enabled=superresolution_enabled,
+        time_freq=time_freq,
+        simulation_pad_days=ballistic["simulation_pad_days"],
     )
 
     rotation = compute_rotation_state(
-        cr_days=ballistic.cr_days,
-        phi_step_minutes=ballistic.phi_step_minutes,
+        cr_days=ballistic["cr_days"],
+        phi_step_minutes=ballistic["phi_step_minutes"],
     )
     grid = build_grid_axes(
         sim_start=prepared["sim_start"],
         sim_end=prepared["sim_end"],
-        time_freq=time_controls.time_freq,
+        time_freq=time_freq,
         phi_step=rotation.phi_step,
-        r0=ballistic.r0,
-        r_max=ballistic.r_max,
-        dense_memory_budget_gb=runtime.dense_memory_budget_gb,
-        memory_guard_enabled=ballistic.memory_guard_enabled,
+        r0=ballistic["r0"],
+        r_max=ballistic["r_max"],
+        dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
+        memory_guard_enabled=ballistic["memory_guard_enabled"],
     )
     transport = build_transport_state(
         time_axis=grid.time_axis,
         phi_axis=grid.phi_axis,
         rotation_state=rotation,
-        horizon_hours=ballistic.horizon_hours,
-        time_step_hours=time_controls.time_step_hours,
-        field_half_width_h=ballistic.field_half_width_h,
-        r_solar_km=ballistic.r_solar_km,
+        horizon_hours=ballistic["horizon_hours"],
+        time_step_hours=time_step_hours,
+        field_half_width_h=ballistic["field_half_width_h"],
+        r_solar_km=ballistic["r_solar_km"],
     )
 
     df_v_run = (
@@ -193,7 +200,7 @@ def main(argv):
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),
-        use_cr_reset=ballistic.use_cr_reset,
+        use_cr_reset=ballistic["use_cr_reset"],
     )
     (
         _seed_times,
@@ -207,11 +214,11 @@ def main(argv):
         df_v_run=df_v_run,
         cr_steps=transport.cr_steps,
         horizon_steps=transport.horizon_steps,
-        time_freq=time_controls.time_freq,
+        time_freq=time_freq,
         t0_ref=transport.t0_ref,
-        time_step_hours=time_controls.time_step_hours,
+        time_step_hours=time_step_hours,
         r_kernel_scale=transport.r_kernel_scale,
-        r0=ballistic.r0,
+        r0=ballistic["r0"],
     )
     stats = run_bulk_propagation(
         seed_vals=seed_vals,
@@ -229,9 +236,9 @@ def main(argv):
         n_r=len(grid.r_axis),
         max_flat=accumulators.max_flat,
         cr_flat=accumulators.cr_flat,
-        use_swept_cell=ballistic.use_swept_cell,
-        use_cr_reset=ballistic.use_cr_reset,
-        max_seed_batch=runtime.max_seed_batch,
+        use_swept_cell=ballistic["use_swept_cell"],
+        use_cr_reset=ballistic["use_cr_reset"],
+        max_seed_batch=runtime["max_seed_batch"],
     )
     print(
         "Propagation runtime:",
@@ -247,7 +254,7 @@ def main(argv):
     post = postprocess_max_field(
         V_accum_max=accumulators.V_accum_max,
         slow_sw_speed=empirical.v_min_value(),
-        post_chunk_t=runtime.post_chunk_t,
+        post_chunk_t=runtime["post_chunk_t"],
     )
     df_ace_earth = load_ace_at_earth()
     df_forecast_earth = build_forecast_earth_frame(prepared["sdo_input_df"])
@@ -260,8 +267,8 @@ def main(argv):
         slow_sw_speed=empirical.v_min_value(),
         df_ace_earth=df_ace_earth,
         df_forecast_earth=df_forecast_earth,
-        phi_target=ballistic.earth_phi_target,
-        r_target=ballistic.earth_r_target,
+        phi_target=ballistic["earth_phi_target"],
+        r_target=ballistic["earth_r_target"],
         draw_slow_sw=True,
         backfill_empty_with_300=False,
     )
@@ -277,16 +284,16 @@ def main(argv):
             post_vlims_raw=post.max_vlims_raw,
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             earth_frame=earth_frame,
-            time_step_minutes=time_controls.time_step_minutes,
-            superresolution_enabled=time_controls.superresolution_enabled,
+            time_step_minutes=time_step_minutes,
+            superresolution_enabled=superresolution_enabled,
             slow_sw_speed=empirical.v_min_value(),
-            r0=ballistic.r0,
-            cr_days=ballistic.cr_days,
+            r0=ballistic["r0"],
+            cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
             backfill_empty_with_300=False,
             anim_fps=args.animation_fps,
             anim_dpi=(
-                runtime.animation_dpi
+                runtime["animation_dpi"]
                 if args.animation_dpi is None
                 else args.animation_dpi
             ),
