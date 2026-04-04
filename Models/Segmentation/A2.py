@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from Models._base import DateRangeSpec, ModelSpec
+from Models.Segmentation._base import DateRangeSpec, ModelSpec
 
 YEARS = (2011, 2015, 2018, 2020)
 VAL_FRACTION = 0.1

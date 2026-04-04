@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from Models._base import DateRangeSpec, ModelSpec
+from Models.Segmentation._base import DateRangeSpec, ModelSpec
 
 
 def _split_selector(start: str, end: str):
@@ -17,39 +17,28 @@ def _split_selector(start: str, end: str):
     return _select
 
 MODEL = ModelSpec(
-    model_id="A1",
+    model_id="A0",
     params={
-        "base_filters": 80,
-        "img_size": 256,
-        "num_epochs": 30,
+        "base_filters": 32,
+        "img_size": 64,
+        "num_epochs": 20,
         "learning_rate": 0.0001,
         "avoid_requantization": False,
-        "correct_steps_by_n": False,
+        "correct_steps_by_n": True,
         "batch_size": 4,
     },
 )
 
 D1 = DateRangeSpec(
     range_id="D1",
-    start="20170501",
-    end="20170801",
-    keep_every=3,
-    selector=_split_selector("20170501", "20170801"),
+    start="20170101",
+    end="20180101",
+    keep_every=1,
+    selector=_split_selector("20170101", "20180101"),
 )
-
-
-D2 = DateRangeSpec(
-    range_id="D1",
-    start="20220101",
-    end="20230101",
-    keep_every=6,
-    selector=_split_selector("20170501", "20170801"),
-)
-
 
 DATE_RANGES = {
     "D1": D1,
-    "D2": D2,
 }
 
 
