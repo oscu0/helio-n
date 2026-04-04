@@ -19,7 +19,9 @@ class CHSWModel:
         source_path = Path(path) if path is not None else DEFAULT_SHUGAY_PATH
         spec = spec_from_file_location("helio_n_ch_sw_model", source_path)
         module = module_from_spec(spec)
-        assert spec.loader is not None, f"Unable to load CH-SW model module: {source_path}"
+        assert (
+            spec.loader is not None
+        ), f"Unable to load CH-SW model module: {source_path}"
         spec.loader.exec_module(module)
         loaded = module.load()
         assert isinstance(
@@ -33,6 +35,7 @@ class CHSWModel:
 
 @dataclass(frozen=True)
 class EmpiricalCHSWModel(CHSWModel):
+    # v_min can be func or float
     v_min: object
     a: float
     alpha: float
@@ -67,30 +70,3 @@ class EmpiricalCHSWModel(CHSWModel):
         if isinstance(area, pd.Series):
             return pd.Series(speed, index=area.index, name="v_empirical")
         return speed
-
-    def save(self, path):
-        output_path = Path(path)
-        assert not callable(
-            self.v_min
-        ), "EmpiricalCHSWModel.save() only supports constant v_min values"
-        output_path.write_text(
-            "\n".join(
-                [
-                    "from pathlib import Path",
-                    "",
-                    "from Library.SW.CH_SW_Model import EmpiricalCHSWModel",
-                    "",
-                    "MODEL = EmpiricalCHSWModel.from_fields(",
-                    f"    source_path=Path(__file__).resolve(),",
-                    f"    v_min={float(self.v_min)!r},",
-                    f"    a={float(self.a)!r},",
-                    f"    alpha={float(self.alpha)!r},",
-                    ")",
-                    "",
-                    "",
-                    "def load():",
-                    "    return MODEL",
-                    "",
-                ]
-            )
-        )
