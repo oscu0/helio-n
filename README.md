@@ -22,7 +22,8 @@ This repo contains a small set of scripts to prepare data, train the U-Net, run 
 - Global plot settings: `Config/Plot.json` (`target_px`, `dpi`).
 - Paths/parquet outputs live under `Outputs/Artifacts/<hostname>/`.
 - Models save to `Outputs/Models/<architecture><date_range>.keras`.
-- Model definitions and date ranges live in `Models/` (e.g., `Models/A1.py`).
+- Segmentation model definitions and date ranges live in `Models/Segmentation/` (e.g., `Models/Segmentation/A1.py`).
+- CH-SW correspondence model modules live in `Models/CH_SW_Correspondence/` (currently `Shugay.py`).
 
 ## Data preparation
 Build the dataset parquet from raw FITS/masks/HMI roots.
@@ -42,8 +43,8 @@ python Scripts/Train.py <architecture_id> <date_range_id>
 ```
 
 - Example: `python Scripts/Train.py A2 D1`
-- Loads `Models/<architecture_id>.py` and injects `train_batch_size` from `Machine.json` only if `batch_size` is not set in the model definition.
-- Date ranges are defined in `Models/<architecture_id>.py` and selected by `<date_range_id>`.
+- Loads `Models/Segmentation/<architecture_id>.py` and injects `train_batch_size` from `Machine.json` only if `batch_size` is not set in the model definition.
+- Date ranges are defined in `Models/Segmentation/<architecture_id>.py` and selected by `<date_range_id>`.
 - Uses generator-based training with optional `correct_steps_by_n`.
 - Saves model to `Outputs/Models/<architecture_id><date_range_id>.keras`.
 
