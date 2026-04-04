@@ -77,8 +77,8 @@ def worker_compute(rows, specs, smoothing_params):
 
 def main(argv):
     if len(argv) < 3:
-        print("Usage: python -m Scripts.Make CH\\ Areas <start> <end>")
-        print("Example: python -m Scripts.Make CH\\ Areas 20100101 20101231")
+        print("Usage: python -m Scripts.Make CH_Areas <start> <end>")
+        print("Example: python -m Scripts.Make CH_Areas 20100101 20101231")
         return 1
 
     start = argv[1]
