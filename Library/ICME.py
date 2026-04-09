@@ -2,13 +2,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from Library.Paths import data_path, resolve_repo_path
 
-DEFAULT_ICME_CSV_PATH = Path("Data/merged_icme_short.csv")
+DEFAULT_ICME_CSV_PATH = data_path("merged_icme_short.csv")
 
 
 def load_icme_windows(icme_csv_path=DEFAULT_ICME_CSV_PATH):
     """Load ICME intervals from the repo CSV and normalize them to start/end windows."""
-    csv_path = Path(icme_csv_path)
+    csv_path = resolve_repo_path(icme_csv_path)
     assert csv_path.exists(), f"Missing ICME csv: {csv_path}"
 
     icme_df = pd.read_csv(csv_path).copy()

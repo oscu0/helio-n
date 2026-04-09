@@ -16,6 +16,7 @@ from Library.SW.Ballistic import (  # noqa: E402
     prepare_seed_inputs,
     run_bulk_propagation,
 )
+from Library.Paths import data_path, resolve_repo_path  # noqa: E402
 from Library.SW.Config import (  # noqa: E402
     load_ballistic_spec,
     load_empirical_spec,
@@ -57,7 +58,7 @@ def parse_args(argv):
     )
     parser.add_argument(
         "--input-parquet",
-        default="Data/CH Area.parquet",
+        default=str(data_path("CH Area.parquet")),
         help="Parquet input used when --input-source parquet.",
     )
     parser.add_argument(
@@ -150,7 +151,7 @@ def main(argv):
         start_dt=start_dt,
         end_dt=end_dt,
         source=args.input_source,
-        input_parquet_path=args.input_parquet,
+        input_parquet_path=resolve_repo_path(args.input_parquet),
     )
     prepared = build_model_input_series(
         sdo_input_df=df_sdo_sw,

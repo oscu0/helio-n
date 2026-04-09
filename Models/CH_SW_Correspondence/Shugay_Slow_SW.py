@@ -3,12 +3,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from Library.Paths import data_path, resolve_repo_path
 from Library.SW.CH_SW_Model import EmpiricalCHSWModel
 
-ACE_PATH = Path("Data/ACE At Earth 1h.parquet")
+ACE_PATH = data_path("ACE At Earth 1h.parquet")
 
 
 def load_ace_speed_series(path=ACE_PATH):
+    path = resolve_repo_path(path)
     df = pd.read_parquet(path).copy()
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)

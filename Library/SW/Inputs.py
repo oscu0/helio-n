@@ -5,6 +5,7 @@ import pandas as pd
 import psycopg
 
 import userpwd
+from Library.Paths import data_path, resolve_repo_path
 
 DEFAULT_SQL_QUERY = """
 SELECT
@@ -32,8 +33,8 @@ DEFAULT_SQL_CONNECTION = {
     "dbname": "smdc",
 }
 
-DEFAULT_INPUT_PARQUET_PATH = Path("Data/CH Area.parquet")
-DEFAULT_ACE_PARQUET_PATH = Path("Data/ACE At Earth 1h.parquet")
+DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
+DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
 
 
 def iter_year_windows(start_dt, end_dt):
@@ -47,7 +48,7 @@ def iter_year_windows(start_dt, end_dt):
 
 
 def load_sw_input_from_parquet(input_parquet_path=DEFAULT_INPUT_PARQUET_PATH):
-    parquet_path = Path(input_parquet_path)
+    parquet_path = resolve_repo_path(input_parquet_path)
     assert parquet_path.exists(), f"Missing input parquet: {parquet_path}"
     return pd.read_parquet(parquet_path).copy()
 
@@ -245,6 +246,7 @@ def build_model_input_series(
 
 
 def load_ace_at_earth(ace_path=DEFAULT_ACE_PARQUET_PATH):
+    ace_path = resolve_repo_path(ace_path)
     df_ace_earth = pd.read_parquet(ace_path).copy()
     if not isinstance(df_ace_earth.index, pd.DatetimeIndex):
         df_ace_earth.index = pd.to_datetime(df_ace_earth.index)
