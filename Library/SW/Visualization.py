@@ -328,18 +328,18 @@ def plot_polar_snapshot(
         fontsize=9,
         color="dimgray",
     )
-    ax.text(
-        0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
-    )
-    ax.text(
-        0.02,
-        0.04,
-        "old",
-        transform=ax.transAxes,
-        va="bottom",
-        fontsize=9,
-        color="dimgray",
-    )
+    # ax.text(
+    #     0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
+    # )
+    # ax.text(
+    #     0.02,
+    #     0.04,
+    #     "old",
+    #     transform=ax.transAxes,
+    #     va="bottom",
+    #     fontsize=9,
+    #     color="dimgray",
+    # )
     ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
     ax.set_yticklabels([])
     ax.text(
