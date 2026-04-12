@@ -35,6 +35,21 @@ DEFAULT_SQL_CONNECTION = {
 
 DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
 DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
+DEFAULT_ACE_EARTH_SAT = "ace_earth"
+DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
+SATELLITE_FRAME_COLUMNS = [
+    "v",
+    "v_gse_x",
+    "v_gse_y",
+    "v_gse_z",
+    "x_gse",
+    "y_gse",
+    "z_gse",
+    "phi_target",
+    "r_target",
+    "lat_hgs",
+    "v_swx",
+]
 
 
 def iter_year_windows(start_dt, end_dt):
@@ -162,6 +177,61 @@ def load_sw_input_frame(
     return normalize_sw_input_frame(df_input_raw, start_dt=start_dt, end_dt=end_dt)
 
 
+def normalize_satellite_frame(df_sat_raw, sat, label=None):
+    df_sat = df_sat_raw.copy()
+
+    if not isinstance(df_sat.index, pd.DatetimeIndex):
+        time_column = next(
+            (
+                column
+                for column in ("time", "date", "dt")
+                if column in df_sat.columns
+            ),
+            None,
+        )
+        assert time_column is not None, "Satellite frame must be time-indexed"
+        df_sat = df_sat.set_index(time_column)
+
+    df_sat.index = pd.to_datetime(df_sat.index)
+    rename_map = {}
+    if "v" not in df_sat.columns:
+        for candidate in ("speed", "v_ace", "v_real"):
+            if candidate in df_sat.columns:
+                rename_map[candidate] = "v"
+                break
+    if "v_swx" not in df_sat.columns and "forecast_sw_speed" in df_sat.columns:
+        rename_map["forecast_sw_speed"] = "v_swx"
+    df_sat = df_sat.rename(columns=rename_map)
+
+    keep_columns = [column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns]
+    df_sat = df_sat[keep_columns].sort_index()
+    df_sat = df_sat[~df_sat.index.duplicated(keep="last")]
+
+    numeric_columns = [
+        column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns
+    ]
+    for column in numeric_columns:
+        df_sat[column] = pd.to_numeric(df_sat[column], errors="coerce")
+
+    df_sat.attrs["sat"] = str(sat)
+    df_sat.attrs["label"] = str(label) if label is not None else str(sat)
+    return df_sat
+
+
+def load_cached_satellite_frame(path, sat, label=None):
+    sat_path = resolve_repo_path(path)
+    df_sat_raw = pd.read_parquet(sat_path).copy()
+    return normalize_satellite_frame(df_sat_raw, sat=sat, label=label)
+
+
+def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
+    return load_cached_satellite_frame(
+        ace_path,
+        sat=DEFAULT_ACE_EARTH_SAT,
+        label=DEFAULT_ACE_EARTH_LABEL,
+    )
+
+
 def v_from_area(area, empirical, t=None):
     return empirical.v_from_area(area, t=t)
 
@@ -246,23 +316,26 @@ def build_model_input_series(
 
 
 def load_ace_at_earth(ace_path=DEFAULT_ACE_PARQUET_PATH):
-    ace_path = resolve_repo_path(ace_path)
-    df_ace_earth = pd.read_parquet(ace_path).copy()
-    if not isinstance(df_ace_earth.index, pd.DatetimeIndex):
-        df_ace_earth.index = pd.to_datetime(df_ace_earth.index)
-    if "speed" in df_ace_earth.columns:
-        df_ace_earth = df_ace_earth.rename(columns={"speed": "v_ace"})
-    return df_ace_earth[["v_ace"]].sort_index()
+    df_ace_earth = load_ace_earth_frame(ace_path)
+    return df_ace_earth[["v"]].rename(columns={"v": "v_ace"})
 
 
-def build_forecast_earth_frame(sdo_input_df):
-    df_forecast_earth = pd.DataFrame(index=pd.to_datetime(sdo_input_df["dt"]))
+def build_ace_earth_swx_frame(sdo_input_df):
+    df_swx = pd.DataFrame(index=pd.to_datetime(sdo_input_df["dt"]))
     if "forecast_sw_speed" in sdo_input_df.columns:
-        df_forecast_earth["forecast_sw_speed"] = pd.to_numeric(
+        df_swx["v_swx"] = pd.to_numeric(
             sdo_input_df["forecast_sw_speed"], errors="coerce"
         ).to_numpy()
     elif "sw_speed_1" in sdo_input_df.columns:
-        df_forecast_earth["forecast_sw_speed"] = pd.to_numeric(
+        df_swx["v_swx"] = pd.to_numeric(
             sdo_input_df["sw_speed_1"], errors="coerce"
         ).to_numpy()
-    return df_forecast_earth.sort_index()
+    df_swx.attrs["sat"] = DEFAULT_ACE_EARTH_SAT
+    df_swx.attrs["label"] = DEFAULT_ACE_EARTH_LABEL
+    return df_swx.sort_index()
+
+
+def build_forecast_earth_frame(sdo_input_df):
+    return build_ace_earth_swx_frame(sdo_input_df).rename(
+        columns={"v_swx": "forecast_sw_speed"}
+    )

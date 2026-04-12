@@ -29,13 +29,13 @@ from Library.SW.Coords import (  # noqa: E402
     compute_rotation_state,
 )
 from Library.SW.Inputs import (  # noqa: E402
-    build_forecast_earth_frame,
+    build_ace_earth_swx_frame,
     build_model_input_series,
-    load_ace_at_earth,
+    load_ace_earth_frame,
     load_sw_input_frame,
 )
 from Library.SW.Visualization import (  # noqa: E402
-    build_earth_comparison_frame,
+    build_satellite_comparison_frame,
     export_polar_animation,
 )
 
@@ -257,23 +257,40 @@ def main(argv):
         slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
         post_chunk_t=runtime["post_chunk_t"],
     )
-    df_ace_earth = load_ace_at_earth()
-    df_forecast_earth = build_forecast_earth_frame(prepared["sdo_input_df"])
-    earth_frame = build_earth_comparison_frame(
-        time_axis=grid.time_axis,
-        phi_axis=grid.phi_axis,
-        r_axis=grid.r_axis,
-        grid_raw=post.V_grid,
-        slow_sw_pred_mask=post.max_slow_sw_pred_mask,
-        slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
-        df_ace_earth=df_ace_earth,
-        df_forecast_earth=df_forecast_earth,
-        phi_target=ballistic["earth_phi_target"],
-        r_target=ballistic["earth_r_target"],
-        draw_slow_sw=True,
-        backfill_empty_with_300=False,
-    )
-    earth_frame_window = earth_frame.loc[grid.time_axis.min() : grid.time_axis.max()]
+    plot_sats = [
+        {
+            "sat": "ace_earth",
+            "label": "ACE @ Earth",
+            "phi_target": ballistic["earth_phi_target"],
+            "r_target": ballistic["earth_r_target"],
+        }
+    ]
+    satellite_frames = {"ace_earth": load_ace_earth_frame()}
+    satellite_swx_frames = {
+        "ace_earth": build_ace_earth_swx_frame(prepared["sdo_input_df"])
+    }
+    comparison_frames = {}
+    for sat_spec in plot_sats:
+        sat_name = sat_spec["sat"]
+        df_sat = satellite_frames[sat_name].copy()
+        df_sat.attrs["label"] = sat_spec["label"]
+        comparison_frames[sat_name] = build_satellite_comparison_frame(
+            time_axis=grid.time_axis,
+            phi_axis=grid.phi_axis,
+            r_axis=grid.r_axis,
+            grid_raw=post.V_grid,
+            slow_sw_pred_mask=post.max_slow_sw_pred_mask,
+            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
+            df_sat=df_sat,
+            df_swx=satellite_swx_frames.get(sat_name),
+            phi_target=sat_spec["phi_target"],
+            r_target=sat_spec["r_target"],
+            draw_slow_sw=True,
+            backfill_empty_with_300=False,
+        )
+    primary_sat = plot_sats[0]["sat"]
+    primary_frame = comparison_frames[primary_sat]
+    earth_frame_window = primary_frame.loc[grid.time_axis.min() : grid.time_axis.max()]
 
     if not args.skip_animation:
         animation_stats = export_polar_animation(
@@ -284,7 +301,7 @@ def main(argv):
             grid_raw=post.V_grid,
             post_vlims_raw=post.max_vlims_raw,
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
-            earth_frame=earth_frame,
+            comparison_frames=comparison_frames,
             time_step_minutes=time_step_minutes,
             superresolution_enabled=superresolution_enabled,
             slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
