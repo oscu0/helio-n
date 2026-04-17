@@ -25,7 +25,6 @@ WHERE f.forecast_dt BETWEEN %(start_dt)s AND %(end_dt)s
 ORDER BY f.forecast_dt, f.dt;
 """
 
-
 SDO_V2_HANDOFF = "2019-01-01"
 DEFAULT_SQL_CONNECTION = {
     "host": "213.131.1.41",
@@ -92,7 +91,11 @@ def load_sw_input_from_sql(
                 if chunk_query is None:
                     chunk_query = DEFAULT_SQL_QUERY.replace(
                         "SDO_PREFIX",
-                        "sdo" if chunk_start < pd.Timestamp(SDO_V2_HANDOFF) else "sdo_v2",
+                        (
+                            "sdo"
+                            if chunk_start < pd.Timestamp(SDO_V2_HANDOFF)
+                            else "sdo_v2"
+                        ),
                     )
                 cur.execute(
                     chunk_query,
@@ -182,11 +185,7 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
 
     if not isinstance(df_sat.index, pd.DatetimeIndex):
         time_column = next(
-            (
-                column
-                for column in ("time", "date", "dt")
-                if column in df_sat.columns
-            ),
+            (column for column in ("time", "date", "dt") if column in df_sat.columns),
             None,
         )
         assert time_column is not None, "Satellite frame must be time-indexed"
@@ -203,7 +202,9 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
         rename_map["forecast_sw_speed"] = "v_swx"
     df_sat = df_sat.rename(columns=rename_map)
 
-    keep_columns = [column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns]
+    keep_columns = [
+        column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns
+    ]
     df_sat = df_sat[keep_columns].sort_index()
     df_sat = df_sat[~df_sat.index.duplicated(keep="last")]
 
@@ -321,7 +322,8 @@ def load_ace_at_earth(ace_path=DEFAULT_ACE_PARQUET_PATH):
 
 
 def build_ace_earth_swx_frame(sdo_input_df):
-    df_swx = pd.DataFrame(index=pd.to_datetime(sdo_input_df["dt"]))
+    time_column = "forecast_dt" if "forecast_dt" in sdo_input_df.columns else "dt"
+    df_swx = pd.DataFrame(index=pd.to_datetime(sdo_input_df[time_column]))
     if "forecast_sw_speed" in sdo_input_df.columns:
         df_swx["v_swx"] = pd.to_numeric(
             sdo_input_df["forecast_sw_speed"], errors="coerce"
