@@ -47,6 +47,7 @@ SATELLITE_FRAME_COLUMNS = [
     "phi_target",
     "r_target",
     "lat_hgs",
+    "lat_hge",
     "v_swx",
 ]
 

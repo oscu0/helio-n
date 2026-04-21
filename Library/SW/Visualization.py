@@ -89,11 +89,11 @@ def add_satellite_marker_legend(ax, sat_items):
         sat_legend = ax.legend(
             handles=marker_handles,
             title="Satellites",
-            loc="upper center",
-            bbox_to_anchor=(0.16, 0.93),
+            loc="upper left",
+            bbox_to_anchor=(0.02, 0.96),
             frameon=True,
             borderaxespad=0.0,
-            ncol=min(3, len(marker_handles)),
+            ncol=1,
             fontsize=8,
             title_fontsize=9,
         )
@@ -193,6 +193,8 @@ def build_satellite_comparison_frame(
         )
     if df_sat is not None and "lat_hgs" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
+    if df_sat is not None and "lat_hge" in df_sat.columns:
+        comparison_frame = comparison_frame.join(df_sat[["lat_hge"]], how="left")
     if df_swx is not None and "v_swx" in df_swx.columns:
         comparison_frame = comparison_frame.join(df_swx[["v_swx"]], how="outer")
 
@@ -318,16 +320,6 @@ def plot_polar_snapshot(
     colorbar.set_label("v (km/s)")
 
     ax.set_title(f"phi-R at {date_str}", y=1.14, pad=0)
-    ax.text(
-        0.5,
-        1.06,
-        f"draw_slow_sw={draw_slow_sw} | backfill_300={backfill_empty_with_300}",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=9,
-        color="dimgray",
-    )
     # ax.text(
     #     0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
     # )
@@ -475,25 +467,30 @@ def export_polar_animation(
     earth_ylim = (earth_vmin - earth_pad, earth_vmax + earth_pad)
 
     n_sat_panels = max(1, len(sat_items))
-    panel_height = 1.35
-    fig_height = 6.8 + panel_height * n_sat_panels
-    fig = plt.figure(figsize=(7.2, fig_height))
-    height_ratios = [3.4] + [1.25] * n_sat_panels
+    panel_height = 1.45
+    fig_height = max(6.2, panel_height * n_sat_panels + 0.8)
+    fig = plt.figure(figsize=(12.8, fig_height))
+    height_ratios = [1.0] * n_sat_panels
     grid_spec = fig.add_gridspec(
-        1 + n_sat_panels, 1, height_ratios=height_ratios, hspace=0.38
+        n_sat_panels,
+        2,
+        width_ratios=[1.15, 1.0],
+        height_ratios=height_ratios,
+        wspace=0.22,
+        hspace=0.36,
     )
-    ax = fig.add_subplot(grid_spec[0], projection="polar")
+    ax = fig.add_subplot(grid_spec[:, 0], projection="polar")
     sat_axes = []
     shared_axis = None
     for sat_idx in range(n_sat_panels):
         sat_axis = fig.add_subplot(
-            grid_spec[1 + sat_idx],
+            grid_spec[sat_idx, 1],
             sharex=shared_axis if shared_axis is not None else None,
         )
         sat_axes.append(sat_axis)
         if shared_axis is None:
             shared_axis = sat_axis
-    fig.subplots_adjust(top=0.74, right=0.86)
+    fig.subplots_adjust(top=0.88, right=0.93, left=0.05, bottom=0.08)
 
     cmap = plt.cm.plasma.copy()
     cmap.set_bad((1, 1, 1, 0))
@@ -567,20 +564,10 @@ def export_polar_animation(
         )
     add_satellite_marker_legend(ax, sat_items)
 
-    colorbar = plt.colorbar(artist, pad=0.14, fraction=0.05)
+    colorbar = plt.colorbar(artist, ax=ax, pad=0.14, fraction=0.05)
     colorbar.set_label("v (km/s)")
 
     title = ax.set_title("", y=1.14, pad=0)
-    ax.text(
-        0.5,
-        1.06,
-        f"draw_slow_sw={draw_slow_sw} | backfill_300={backfill_empty_with_300} | style={anim_plot_style}",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=9,
-        color="dimgray",
-    )
     ax.text(
         0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
     )
@@ -658,6 +645,8 @@ def export_polar_animation(
         sat_axis.grid(alpha=0.25)
         sat_axis.set_ylim(*earth_ylim)
         sat_axis.legend(loc="upper left", fontsize=8)
+        if sat_idx < n_sat_panels - 1:
+            sat_axis.tick_params(labelbottom=False)
 
     last_sat_axis = sat_axes[-1]
     last_sat_axis.xaxis.set_major_locator(mdates.AutoDateLocator())
