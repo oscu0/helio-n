@@ -14,6 +14,10 @@ PREDICT_RAW_COLUMN_CANDIDATES = ("v_predict_raw", "v_model_earth_raw")
 REAL_COLUMN_CANDIDATES = ("v_real", "v_ace")
 SWX_COLUMN_CANDIDATES = ("v_swx", "forecast_sw_speed")
 SAT_MARKER_SHAPES = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h", "*")
+PREDICT_LINE_COLOR = "tab:red"
+REAL_LINE_COLOR = "tab:green"
+SWX_LINE_COLOR = "tab:orange"
+SLOW_SW_LINE_COLOR = "tab:gray"
 
 
 def resolve_slow_sw_speed(time_axis, slow_sw_speed):
@@ -90,8 +94,11 @@ def add_satellite_marker_legend(ax, sat_items):
             handles=marker_handles,
             title="Satellites",
             loc="upper left",
-            bbox_to_anchor=(0.02, 0.96),
+            bbox_to_anchor=(0.0, 1.0),
             frameon=True,
+            facecolor="white",
+            edgecolor="gray",
+            framealpha=0.72,
             borderaxespad=0.0,
             ncol=1,
             fontsize=8,
@@ -183,28 +190,13 @@ def update_polar_speed_mesh(artist, frame_data):
 
 
 def format_polar_speed_title(current_time):
-    return f"phi-R at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
+    return f"Heliosphere at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
 
 
 def configure_polar_speed_axis(ax, r_axis, r0, title_text=""):
     title = ax.set_title(title_text, y=1.14, pad=0)
     ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
     ax.set_yticklabels([])
-    ax.text(
-        0.74,
-        0.93,
-        f"R0 = {int(r0)} Rs\nRmax = {int(np.nanmax(r_axis))} Rs\nEarth = 215 Rs",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8,
-        bbox=dict(
-            boxstyle="round,pad=0.28",
-            facecolor="white",
-            edgecolor="gray",
-            alpha=0.85,
-        ),
-    )
     return title
 
 
@@ -242,6 +234,164 @@ def update_satellite_polar_markers(sat_items, current_time, r_axis):
             sat_frame.loc[current_time, "r_target"], r_axis=r_axis
         )
         sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
+
+
+def resolve_satellite_panel_ylim(sat_items):
+    y_parts = []
+    for sat_item in sat_items:
+        for column in (
+            sat_item["predict_col"],
+            sat_item["real_col"],
+            sat_item["swx_col"],
+        ):
+            if column is None:
+                continue
+            values = sat_item["frame"][column].to_numpy(dtype=float)
+            finite = values[np.isfinite(values)]
+            if finite.size > 0:
+                y_parts.append(finite)
+    if y_parts:
+        y_all = np.concatenate(y_parts)
+        y_min = float(np.min(y_all))
+        y_max = float(np.max(y_all))
+    else:
+        y_min = 250.0
+        y_max = 850.0
+    y_pad = max(10.0, 0.08 * (y_max - y_min + 1e-6))
+    return y_min - y_pad, y_max + y_pad
+
+
+def update_satellite_panel_windows(
+    sat_items,
+    slow_sw_series,
+    current_time,
+    window_before_days,
+    window_after_days,
+):
+    current_time = pd.Timestamp(current_time)
+    window_start = current_time - pd.Timedelta(days=float(window_before_days))
+    window_end = current_time + pd.Timedelta(days=float(window_after_days))
+    for sat_item in sat_items:
+        compare_window = sat_item["frame"].loc[window_start:window_end]
+        if sat_item["predict_line"] is not None:
+            sat_item["predict_line"].set_data(
+                compare_window.index,
+                compare_window[sat_item["predict_col"]].values,
+            )
+        if sat_item["real_line"] is not None:
+            sat_item["real_line"].set_data(
+                compare_window.index,
+                compare_window[sat_item["real_col"]].values,
+            )
+        if sat_item["swx_line"] is not None:
+            sat_item["swx_line"].set_data(
+                compare_window.index,
+                compare_window[sat_item["swx_col"]].values,
+            )
+        slow_sw_window = slow_sw_series.loc[window_start:window_end]
+        sat_item["slow_sw_line"].set_data(slow_sw_window.index, slow_sw_window.values)
+        sat_item["time_marker"].set_xdata([current_time, current_time])
+        sat_item["axis"].set_xlim(window_start, window_end)
+
+
+def initialize_satellite_panels(
+    sat_axes,
+    sat_items,
+    slow_sw_series,
+    current_time,
+    window_before_days,
+    window_after_days,
+    y_lim,
+):
+    for sat_idx, sat_item in enumerate(sat_items):
+        sat_axis = sat_axes[sat_idx]
+        sat_item["axis"] = sat_axis
+        sat_item["predict_line"] = None
+        sat_item["real_line"] = None
+        sat_item["swx_line"] = None
+        sat_item["slow_sw_line"] = None
+        sat_item["time_marker"] = sat_axis.axvline(
+            current_time,
+            color="black",
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.7,
+        )
+
+        if sat_item["predict_col"] is not None:
+            (sat_item["predict_line"],) = sat_axis.plot(
+                [],
+                [],
+                color=PREDICT_LINE_COLOR,
+                linewidth=1.7,
+                label="v_predict",
+            )
+        if sat_item["real_col"] is not None:
+            (sat_item["real_line"],) = sat_axis.plot(
+                [],
+                [],
+                color=REAL_LINE_COLOR,
+                linewidth=1.4,
+                alpha=0.95,
+                linestyle="--",
+                label="v_real",
+            )
+        if sat_item["swx_col"] is not None:
+            (sat_item["swx_line"],) = sat_axis.plot(
+                [],
+                [],
+                color=SWX_LINE_COLOR,
+                linewidth=1.35,
+                alpha=0.95,
+                linestyle=":",
+                label="v_swx",
+            )
+        (sat_item["slow_sw_line"],) = sat_axis.plot(
+            slow_sw_series.index,
+            slow_sw_series.values,
+            color=SLOW_SW_LINE_COLOR,
+            linestyle="-.",
+            linewidth=1.0,
+            alpha=0.75,
+            label="slow SW",
+        )
+        sat_axis.set_ylabel("v (km/s)")
+        sat_axis.set_title(
+            f"   {sat_item['label']}: t-{float(window_before_days):.0f}d to "
+            f"t+{float(window_after_days):.0f}d",
+            fontsize=10,
+            loc="left",
+        )
+        sat_axis.plot(
+            [0.012],
+            [1.035],
+            transform=sat_axis.transAxes,
+            linestyle="None",
+            marker=sat_item["marker"],
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=7,
+            clip_on=False,
+        )
+        sat_axis.grid(alpha=0.25)
+        sat_axis.set_ylim(*y_lim)
+        sat_axis.legend(loc="upper left", fontsize=8)
+        if sat_idx < len(sat_items) - 1:
+            sat_axis.tick_params(labelbottom=False)
+        sat_axis.tick_params(axis="x", labelsize=8)
+
+    if sat_items:
+        last_sat_axis = sat_axes[len(sat_items) - 1]
+        last_sat_axis.xaxis.set_major_locator(mdates.AutoDateLocator())
+        last_sat_axis.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
+        update_satellite_panel_windows(
+            sat_items=sat_items,
+            slow_sw_series=slow_sw_series,
+            current_time=current_time,
+            window_before_days=window_before_days,
+            window_after_days=window_after_days,
+        )
 
 
 def build_model_target_frame(time_axis, df_sat, phi_target, r_target):
@@ -394,6 +544,7 @@ def plot_polar_snapshot(
     earth_frame=None,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
+    cr_days=27.0,
 ):
     slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     comparison_frames = resolve_comparison_frames(
@@ -420,9 +571,31 @@ def plot_polar_snapshot(
         print(f"No data for {date_str} with current display settings")
         return
 
-    fig = plt.figure(figsize=(7.2, 7.2))
-    ax = fig.add_subplot(111, projection="polar")
-    fig.subplots_adjust(top=0.84, right=0.86)
+    window_before_days = float(cr_days - 7.0)
+    window_after_days = 7.0
+    y_lim = resolve_satellite_panel_ylim(sat_items)
+    n_sat_panels = max(1, len(sat_items))
+    panel_height = 1.55
+    fig_height = max(8.6, 6.4 + panel_height * n_sat_panels)
+    fig = plt.figure(figsize=(8.4, fig_height))
+    grid_spec = fig.add_gridspec(
+        n_sat_panels + 1,
+        1,
+        height_ratios=[4.2] + [1.0] * n_sat_panels,
+        hspace=0.5,
+    )
+    ax = fig.add_subplot(grid_spec[0, 0], projection="polar")
+    sat_axes = []
+    shared_axis = None
+    for sat_idx in range(n_sat_panels):
+        sat_axis = fig.add_subplot(
+            grid_spec[sat_idx + 1, 0],
+            sharex=shared_axis if shared_axis is not None else None,
+        )
+        sat_axes.append(sat_axis)
+        if shared_axis is None:
+            shared_axis = sat_axis
+    fig.subplots_adjust(top=0.94, right=0.86, left=0.12, bottom=0.06)
 
     artist = draw_polar_speed_mesh(
         ax=ax,
@@ -446,6 +619,15 @@ def plot_polar_snapshot(
         r_axis=r_axis,
     )
     add_satellite_marker_legend(ax, sat_items)
+    initialize_satellite_panels(
+        sat_axes=sat_axes,
+        sat_items=sat_items,
+        slow_sw_series=slow_sw_series,
+        current_time=current_time,
+        window_before_days=window_before_days,
+        window_after_days=window_after_days,
+        y_lim=y_lim,
+    )
 
     plt.show()
 
@@ -519,42 +701,21 @@ def export_polar_animation(
     window_after_days = 7.0
 
     sat_items = build_satellite_plot_items(comparison_frames)
-
-    y_parts = []
-    for sat_item in sat_items:
-        for column in (
-            sat_item["predict_col"],
-            sat_item["real_col"],
-            sat_item["swx_col"],
-        ):
-            if column is None:
-                continue
-            values = sat_item["frame"][column].to_numpy(dtype=float)
-            finite = values[np.isfinite(values)]
-            if finite.size > 0:
-                y_parts.append(finite)
-    if y_parts:
-        y_all = np.concatenate(y_parts)
-        earth_vmin = float(np.min(y_all))
-        earth_vmax = float(np.max(y_all))
-    else:
-        earth_vmin = 250.0
-        earth_vmax = 850.0
-    earth_pad = max(10.0, 0.08 * (earth_vmax - earth_vmin + 1e-6))
-    earth_ylim = (earth_vmin - earth_pad, earth_vmax + earth_pad)
+    y_lim = resolve_satellite_panel_ylim(sat_items)
 
     n_sat_panels = max(1, len(sat_items))
-    panel_height = 1.45
-    fig_height = max(6.2, panel_height * n_sat_panels + 0.8)
-    fig = plt.figure(figsize=(12.8, fig_height))
+    panel_height = 1.55
+    fig_width = 14.2
+    fig_height = max(6.8, panel_height * n_sat_panels + 0.9)
+    fig = plt.figure(figsize=(fig_width, fig_height))
     height_ratios = [1.0] * n_sat_panels
     grid_spec = fig.add_gridspec(
         n_sat_panels,
         2,
-        width_ratios=[1.15, 1.0],
+        width_ratios=[1.35, 1.0],
         height_ratios=height_ratios,
-        wspace=0.22,
-        hspace=0.36,
+        wspace=0.34,
+        hspace=0.48,
     )
     ax = fig.add_subplot(grid_spec[:, 0], projection="polar")
     sat_axes = []
@@ -567,7 +728,7 @@ def export_polar_animation(
         sat_axes.append(sat_axis)
         if shared_axis is None:
             shared_axis = sat_axis
-    fig.subplots_adjust(top=0.88, right=0.93, left=0.05, bottom=0.08)
+    fig.subplots_adjust(top=0.88, right=0.94, left=0.045, bottom=0.08)
 
     frame_buf_2d = np.empty((len(r_axis), len(phi_axis)), dtype=np.float32)
     init_t = int(frame_idx[0])
@@ -605,71 +766,15 @@ def export_polar_animation(
 
     add_polar_speed_colorbar(ax=ax, artist=artist)
 
-    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:blue"])
-    for sat_idx, sat_item in enumerate(sat_items):
-        sat_axis = sat_axes[sat_idx]
-        color = prop_cycle[sat_idx % len(prop_cycle)]
-        sat_item["axis"] = sat_axis
-        sat_item["predict_line"] = None
-        sat_item["real_line"] = None
-        sat_item["swx_line"] = None
-        sat_item["slow_sw_line"] = None
-        sat_item["time_marker"] = sat_axis.axvline(
-            time_axis[init_t], color="black", linestyle="--", linewidth=1.0, alpha=0.7
-        )
-
-        if sat_item["predict_col"] is not None:
-            (sat_item["predict_line"],) = sat_axis.plot(
-                [],
-                [],
-                color=color,
-                linewidth=1.4,
-                label="v_predict",
-            )
-        if sat_item["real_col"] is not None:
-            (sat_item["real_line"],) = sat_axis.plot(
-                [],
-                [],
-                color=color,
-                linewidth=1.1,
-                alpha=0.9,
-                linestyle="--",
-                label="v_real",
-            )
-        if sat_item["swx_col"] is not None:
-            (sat_item["swx_line"],) = sat_axis.plot(
-                [],
-                [],
-                color=color,
-                linewidth=1.1,
-                alpha=0.9,
-                linestyle=":",
-                label="v_swx",
-            )
-        (sat_item["slow_sw_line"],) = sat_axis.plot(
-            slow_sw_series.index,
-            slow_sw_series.values,
-            color="red",
-            linestyle="-.",
-            linewidth=1.0,
-            alpha=0.8,
-            label="slow SW",
-        )
-        sat_axis.set_ylabel("v (km/s)")
-        sat_axis.set_title(
-            f"{sat_item['label']}: t-{window_before_days:.0f}d to t+{window_after_days:.0f}d",
-            fontsize=10,
-            loc="left",
-        )
-        sat_axis.grid(alpha=0.25)
-        sat_axis.set_ylim(*earth_ylim)
-        sat_axis.legend(loc="upper left", fontsize=8)
-        if sat_idx < n_sat_panels - 1:
-            sat_axis.tick_params(labelbottom=False)
-
-    last_sat_axis = sat_axes[-1]
-    last_sat_axis.xaxis.set_major_locator(mdates.AutoDateLocator())
-    last_sat_axis.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
+    initialize_satellite_panels(
+        sat_axes=sat_axes,
+        sat_items=sat_items,
+        slow_sw_series=slow_sw_series,
+        current_time=time_axis[init_t],
+        window_before_days=window_before_days,
+        window_after_days=window_after_days,
+        y_lim=y_lim,
+    )
 
     ensure_even_frame_size(fig, dpi=int(anim_dpi))
 
@@ -709,31 +814,13 @@ def export_polar_animation(
             )
             update_polar_speed_mesh(artist=artist, frame_data=frame_buf_2d)
 
-            window_start = t_cur - pd.Timedelta(days=window_before_days)
-            window_end = t_cur + pd.Timedelta(days=window_after_days)
-            for sat_item in sat_items:
-                compare_window = sat_item["frame"].loc[window_start:window_end]
-                if sat_item["predict_line"] is not None:
-                    sat_item["predict_line"].set_data(
-                        compare_window.index,
-                        compare_window[sat_item["predict_col"]].values,
-                    )
-                if sat_item["real_line"] is not None:
-                    sat_item["real_line"].set_data(
-                        compare_window.index,
-                        compare_window[sat_item["real_col"]].values,
-                    )
-                if sat_item["swx_line"] is not None:
-                    sat_item["swx_line"].set_data(
-                        compare_window.index,
-                        compare_window[sat_item["swx_col"]].values,
-                    )
-                slow_sw_window = slow_sw_series.loc[window_start:window_end]
-                sat_item["slow_sw_line"].set_data(
-                    slow_sw_window.index, slow_sw_window.values
-                )
-                sat_item["time_marker"].set_xdata([t_cur, t_cur])
-                sat_item["axis"].set_xlim(window_start, window_end)
+            update_satellite_panel_windows(
+                sat_items=sat_items,
+                slow_sw_series=slow_sw_series,
+                current_time=t_cur,
+                window_before_days=window_before_days,
+                window_after_days=window_after_days,
+            )
             update_satellite_polar_markers(
                 sat_items=sat_items,
                 current_time=t_cur,
