@@ -117,6 +117,133 @@ def build_satellite_plot_items(comparison_frames):
     return sat_items
 
 
+def build_polar_speed_cmap():
+    cmap = plt.cm.plasma.copy()
+    cmap.set_bad((1, 1, 1, 0))
+    return cmap
+
+
+def resolve_polar_speed_vlims(
+    post_vlims_raw,
+    slow_sw_series,
+    backfill_empty_with_300=False,
+):
+    if backfill_empty_with_300:
+        return float(slow_sw_series.min()), float(post_vlims_raw[1])
+    return float(post_vlims_raw[0]), float(post_vlims_raw[1])
+
+
+def build_polar_speed_frame(
+    grid_raw,
+    slow_sw_pred_mask,
+    slow_sw_series,
+    t_idx,
+    draw_slow_sw=True,
+    backfill_empty_with_300=False,
+    frame_buffer=None,
+):
+    if frame_buffer is None:
+        frame_buffer = np.empty((grid_raw.shape[2], grid_raw.shape[1]), dtype=np.float32)
+
+    ti = int(t_idx)
+    np.copyto(frame_buffer, grid_raw[ti].T)
+    if backfill_empty_with_300:
+        np.nan_to_num(frame_buffer, copy=False, nan=float(slow_sw_series.iloc[ti]))
+    if not draw_slow_sw:
+        frame_buffer[slow_sw_pred_mask[ti].T] = np.nan
+    return frame_buffer
+
+
+def draw_polar_speed_mesh(
+    ax,
+    phi_axis,
+    r_axis,
+    frame_data,
+    vmin,
+    vmax,
+    cmap=None,
+):
+    if cmap is None:
+        cmap = build_polar_speed_cmap()
+    theta = np.deg2rad(phi_axis.astype(np.float32))
+    radius = r_axis.astype(np.float32)
+    return ax.pcolormesh(
+        theta,
+        radius,
+        frame_data,
+        cmap=cmap,
+        shading="nearest",
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+
+def update_polar_speed_mesh(artist, frame_data):
+    artist.set_array(frame_data.ravel())
+
+
+def format_polar_speed_title(current_time):
+    return f"phi-R at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
+
+
+def configure_polar_speed_axis(ax, r_axis, r0, title_text=""):
+    title = ax.set_title(title_text, y=1.14, pad=0)
+    ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
+    ax.set_yticklabels([])
+    ax.text(
+        0.74,
+        0.93,
+        f"R0 = {int(r0)} Rs\nRmax = {int(np.nanmax(r_axis))} Rs\nEarth = 215 Rs",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8,
+        bbox=dict(
+            boxstyle="round,pad=0.28",
+            facecolor="white",
+            edgecolor="gray",
+            alpha=0.85,
+        ),
+    )
+    return title
+
+
+def add_polar_speed_colorbar(ax, artist):
+    colorbar = plt.colorbar(artist, ax=ax, pad=0.14, fraction=0.05)
+    colorbar.set_label("v (km/s)")
+    return colorbar
+
+
+def add_satellite_polar_markers(ax, sat_items):
+    for sat_item in sat_items:
+        (sat_item["polar_marker"],) = ax.plot(
+            [],
+            [],
+            linestyle="None",
+            marker=sat_item["marker"],
+            color="black",
+            markerfacecolor="black",
+            markeredgecolor="black",
+            markersize=9,
+            clip_on=False,
+            zorder=6,
+        )
+
+
+def update_satellite_polar_markers(sat_items, current_time, r_axis):
+    current_time = pd.Timestamp(current_time)
+    for sat_item in sat_items:
+        sat_frame = sat_item["frame"]
+        if current_time not in sat_frame.index:
+            sat_item["polar_marker"].set_data([], [])
+            continue
+        phi_value = float(sat_frame.loc[current_time, "phi_target"])
+        r_value = marker_radius_for_plot(
+            sat_frame.loc[current_time, "r_target"], r_axis=r_axis
+        )
+        sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
+
+
 def build_model_target_frame(time_axis, df_sat, phi_target, r_target):
     target_frame = pd.DataFrame(index=pd.DatetimeIndex(time_axis))
     if df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
@@ -275,100 +402,49 @@ def plot_polar_snapshot(
     )
     sat_items = build_satellite_plot_items(comparison_frames)
     current_time = pd.Timestamp(date_str)
-    t0_ref = time_axis[0]
-    t_idx = int((current_time - t0_ref) / pd.Timedelta(hours=float(time_step_hours)))
-    slow_sw_value = float(slow_sw_series.iloc[t_idx])
-
-    raw_slice_pr = grid_raw[t_idx, :, :]
-    if backfill_empty_with_300:
-        slice_pr = np.where(np.isnan(raw_slice_pr), slow_sw_value, raw_slice_pr)
-        vmin_mode, vmax_mode = slow_sw_value, post_vlims_raw[1]
-    else:
-        slice_pr = raw_slice_pr
-        vmin_mode, vmax_mode = post_vlims_raw
-
-    slice_pred_slow = slow_sw_pred_mask[t_idx, :, :]
-
-    plot_mask = ~np.isnan(slice_pr)
-    if not draw_slow_sw:
-        plot_mask = plot_mask & (~slice_pred_slow)
-
-    pi, ri = np.where(plot_mask)
-    if len(pi) == 0:
+    t_idx = int(pd.DatetimeIndex(time_axis).get_loc(current_time))
+    vmin_mode, vmax_mode = resolve_polar_speed_vlims(
+        post_vlims_raw=post_vlims_raw,
+        slow_sw_series=slow_sw_series,
+        backfill_empty_with_300=backfill_empty_with_300,
+    )
+    frame_data = build_polar_speed_frame(
+        grid_raw=grid_raw,
+        slow_sw_pred_mask=slow_sw_pred_mask,
+        slow_sw_series=slow_sw_series,
+        t_idx=t_idx,
+        draw_slow_sw=draw_slow_sw,
+        backfill_empty_with_300=backfill_empty_with_300,
+    )
+    if not np.isfinite(frame_data).any():
         print(f"No data for {date_str} with current display settings")
         return
-
-    phi_rad = np.deg2rad(phi_axis[pi].astype(float))
-    radius = r_axis[ri].astype(float)
-    colors = slice_pr[pi, ri].astype(float)
 
     fig = plt.figure(figsize=(7.2, 7.2))
     ax = fig.add_subplot(111, projection="polar")
     fig.subplots_adjust(top=0.84, right=0.86)
 
-    scatter = ax.scatter(
-        phi_rad,
-        radius,
-        c=colors,
-        cmap="plasma",
-        s=2,
-        alpha=0.9,
+    artist = draw_polar_speed_mesh(
+        ax=ax,
+        phi_axis=phi_axis,
+        r_axis=r_axis,
+        frame_data=frame_data,
         vmin=vmin_mode,
         vmax=vmax_mode,
     )
-    colorbar = plt.colorbar(scatter, ax=ax, pad=0.14, fraction=0.05)
-    colorbar.set_label("v (km/s)")
-
-    ax.set_title(f"phi-R at {date_str}", y=1.14, pad=0)
-    # ax.text(
-    #     0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
-    # )
-    # ax.text(
-    #     0.02,
-    #     0.04,
-    #     "old",
-    #     transform=ax.transAxes,
-    #     va="bottom",
-    #     fontsize=9,
-    #     color="dimgray",
-    # )
-    ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
-    ax.set_yticklabels([])
-    ax.text(
-        0.74,
-        0.93,
-        f"R0 = {int(r0)} Rs\nRmax = {int(np.nanmax(r_axis))} Rs\nEarth = 215 Rs",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8,
-        bbox=dict(
-            boxstyle="round,pad=0.28",
-            facecolor="white",
-            edgecolor="gray",
-            alpha=0.85,
-        ),
+    add_polar_speed_colorbar(ax=ax, artist=artist)
+    configure_polar_speed_axis(
+        ax=ax,
+        r_axis=r_axis,
+        r0=r0,
+        title_text=format_polar_speed_title(current_time),
     )
-    for sat_item in sat_items:
-        sat_frame = sat_item["frame"]
-        if current_time not in sat_frame.index:
-            continue
-        phi_value = float(sat_frame.loc[current_time, "phi_target"])
-        r_value = marker_radius_for_plot(
-            sat_frame.loc[current_time, "r_target"], r_axis=r_axis
-        )
-        ax.plot(
-            [np.deg2rad(phi_value)],
-            [r_value],
-            linestyle="None",
-            marker=sat_item["marker"],
-            color="black",
-            markerfacecolor="black",
-            markeredgecolor="black",
-            markersize=9,
-            clip_on=False,
-            zorder=6,
-        )
+    add_satellite_polar_markers(ax=ax, sat_items=sat_items)
+    update_satellite_polar_markers(
+        sat_items=sat_items,
+        current_time=current_time,
+        r_axis=r_axis,
+    )
     add_satellite_marker_legend(ax, sat_items)
 
     plt.show()
@@ -400,7 +476,7 @@ def export_polar_animation(
     anim_plot_style="mesh",
     show_progress=True,
 ):
-    assert anim_plot_style in {"mesh", "scatter"}
+    assert anim_plot_style == "mesh"
     slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     comparison_frames = resolve_comparison_frames(
         comparison_frames=comparison_frames,
@@ -432,10 +508,11 @@ def export_polar_animation(
     )
     achieved_speedup = (anim_stride * float(anim_fps)) / float(baseline_fps)
 
-    if backfill_empty_with_300:
-        anim_vmin, anim_vmax = float(slow_sw_series.min()), post_vlims_raw[1]
-    else:
-        anim_vmin, anim_vmax = post_vlims_raw
+    anim_vmin, anim_vmax = resolve_polar_speed_vlims(
+        post_vlims_raw=post_vlims_raw,
+        slow_sw_series=slow_sw_series,
+        backfill_empty_with_300=backfill_empty_with_300,
+    )
 
     frame_idx = np.arange(0, len(time_axis), anim_stride, dtype=np.int32)
     window_before_days = float(cr_days - 7.0)
@@ -492,94 +569,41 @@ def export_polar_animation(
             shared_axis = sat_axis
     fig.subplots_adjust(top=0.88, right=0.93, left=0.05, bottom=0.08)
 
-    cmap = plt.cm.plasma.copy()
-    cmap.set_bad((1, 1, 1, 0))
-
     frame_buf_2d = np.empty((len(r_axis), len(phi_axis)), dtype=np.float32)
     init_t = int(frame_idx[0])
-    init_slow_sw = float(slow_sw_series.iloc[init_t])
-    np.copyto(frame_buf_2d, grid_raw[init_t].T)
-    if backfill_empty_with_300:
-        np.nan_to_num(frame_buf_2d, copy=False, nan=init_slow_sw)
-    if not draw_slow_sw:
-        frame_buf_2d[slow_sw_pred_mask[init_t].T] = np.nan
-
-    if anim_plot_style == "mesh":
-        theta = np.deg2rad(phi_axis.astype(np.float32))
-        radius = r_axis.astype(np.float32)
-        artist = ax.pcolormesh(
-            theta,
-            radius,
-            frame_buf_2d,
-            cmap=cmap,
-            shading="nearest",
-            vmin=anim_vmin,
-            vmax=anim_vmax,
-        )
-    else:
-        phi_rad_all = np.deg2rad(np.repeat(phi_axis.astype(np.float32), len(r_axis)))
-        r_all = np.tile(r_axis.astype(np.float32), len(phi_axis))
-        artist = ax.scatter(
-            phi_rad_all,
-            r_all,
-            c=frame_buf_2d.T.reshape(-1),
-            cmap=cmap,
-            s=2,
-            alpha=0.9,
-            linewidths=0,
-            vmin=anim_vmin,
-            vmax=anim_vmax,
-        )
-
-    ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
-    ax.set_yticklabels([])
-    ax.text(
-        0.74,
-        0.93,
-        f"R0 = {int(r0)} Rs\nRmax = {int(np.nanmax(r_axis))} Rs\nEarth = 215 Rs",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8,
-        bbox=dict(
-            boxstyle="round,pad=0.28",
-            facecolor="white",
-            edgecolor="gray",
-            alpha=0.85,
-        ),
+    build_polar_speed_frame(
+        grid_raw=grid_raw,
+        slow_sw_pred_mask=slow_sw_pred_mask,
+        slow_sw_series=slow_sw_series,
+        t_idx=init_t,
+        draw_slow_sw=draw_slow_sw,
+        backfill_empty_with_300=backfill_empty_with_300,
+        frame_buffer=frame_buf_2d,
+    )
+    artist = draw_polar_speed_mesh(
+        ax=ax,
+        phi_axis=phi_axis,
+        r_axis=r_axis,
+        frame_data=frame_buf_2d,
+        vmin=anim_vmin,
+        vmax=anim_vmax,
+    )
+    title = configure_polar_speed_axis(
+        ax=ax,
+        r_axis=r_axis,
+        r0=r0,
+        title_text=format_polar_speed_title(time_axis[init_t]),
     )
 
-    for sat_item in sat_items:
-        (sat_item["polar_marker"],) = ax.plot(
-            [],
-            [],
-            linestyle="None",
-            marker=sat_item["marker"],
-            color="black",
-            markerfacecolor="black",
-            markeredgecolor="black",
-            markersize=9,
-            clip_on=False,
-            zorder=6,
-        )
+    add_satellite_polar_markers(ax=ax, sat_items=sat_items)
+    update_satellite_polar_markers(
+        sat_items=sat_items,
+        current_time=time_axis[init_t],
+        r_axis=r_axis,
+    )
     add_satellite_marker_legend(ax, sat_items)
 
-    colorbar = plt.colorbar(artist, ax=ax, pad=0.14, fraction=0.05)
-    colorbar.set_label("v (km/s)")
-
-    title = ax.set_title("", y=1.14, pad=0)
-    ax.text(
-        0.02, 0.96, "new", transform=ax.transAxes, va="top", fontsize=9, color="dimgray"
-    )
-    ax.text(
-        0.02,
-        0.04,
-        "old",
-        transform=ax.transAxes,
-        va="bottom",
-        fontsize=9,
-        color="dimgray",
-    )
+    add_polar_speed_colorbar(ax=ax, artist=artist)
 
     prop_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["tab:blue"])
     for sat_idx, sat_item in enumerate(sat_items):
@@ -593,11 +617,6 @@ def export_polar_animation(
         sat_item["time_marker"] = sat_axis.axvline(
             time_axis[init_t], color="black", linestyle="--", linewidth=1.0, alpha=0.7
         )
-        init_phi = np.deg2rad(float(sat_item["frame"]["phi_target"].iloc[init_t]))
-        init_r = marker_radius_for_plot(
-            sat_item["frame"]["r_target"].iloc[init_t], r_axis=r_axis
-        )
-        sat_item["polar_marker"].set_data([init_phi], [init_r])
 
         if sat_item["predict_col"] is not None:
             (sat_item["predict_line"],) = sat_axis.plot(
@@ -677,19 +696,18 @@ def export_polar_animation(
         for t_idx in iterator:
             ti = int(t_idx)
             t_cur = time_axis[ti]
-            slow_sw_value = float(slow_sw_series.iloc[ti])
-            title.set_text(f"phi-R at {t_cur}")
+            title.set_text(format_polar_speed_title(t_cur))
 
-            np.copyto(frame_buf_2d, grid_raw[ti].T)
-            if backfill_empty_with_300:
-                np.nan_to_num(frame_buf_2d, copy=False, nan=slow_sw_value)
-            if not draw_slow_sw:
-                frame_buf_2d[slow_sw_pred_mask[ti].T] = np.nan
-
-            if anim_plot_style == "mesh":
-                artist.set_array(frame_buf_2d.ravel())
-            else:
-                artist.set_array(frame_buf_2d.T.reshape(-1))
+            build_polar_speed_frame(
+                grid_raw=grid_raw,
+                slow_sw_pred_mask=slow_sw_pred_mask,
+                slow_sw_series=slow_sw_series,
+                t_idx=ti,
+                draw_slow_sw=draw_slow_sw,
+                backfill_empty_with_300=backfill_empty_with_300,
+                frame_buffer=frame_buf_2d,
+            )
+            update_polar_speed_mesh(artist=artist, frame_data=frame_buf_2d)
 
             window_start = t_cur - pd.Timedelta(days=window_before_days)
             window_end = t_cur + pd.Timedelta(days=window_after_days)
@@ -716,11 +734,11 @@ def export_polar_animation(
                 )
                 sat_item["time_marker"].set_xdata([t_cur, t_cur])
                 sat_item["axis"].set_xlim(window_start, window_end)
-                phi_value = float(sat_item["frame"]["phi_target"].iloc[ti])
-                r_value = marker_radius_for_plot(
-                    sat_item["frame"]["r_target"].iloc[ti], r_axis=r_axis
-                )
-                sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
+            update_satellite_polar_markers(
+                sat_items=sat_items,
+                current_time=t_cur,
+                r_axis=r_axis,
+            )
             writer.grab_frame()
 
     plt.close(fig)
