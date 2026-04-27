@@ -8,10 +8,8 @@ import pandas as pd
 class RotationState:
     """Rotation constants derived from Carrington cadence settings."""
 
-    cr_days: float
     cr_time: float
     omega: float
-    phi_step_minutes: float
     phi_step: float
 
 
@@ -31,10 +29,8 @@ class TransportState:
     """Precomputed time/radius transport helpers."""
 
     t0_ref: pd.Timestamp
-    phi_delay_h: np.ndarray
     horizon_steps: int
     h_step_idx: np.ndarray
-    h_step_hours: np.ndarray
     r_kernel_scale: np.ndarray
     cr_steps: int
     phi_delay_steps: np.ndarray
@@ -46,10 +42,8 @@ def compute_rotation_state(cr_days, phi_step_minutes):
     omega = 360.0 / cr_time
     phi_step = (float(phi_step_minutes) / 60.0) * 3600.0 * omega
     return RotationState(
-        cr_days=float(cr_days),
         cr_time=cr_time,
         omega=omega,
-        phi_step_minutes=float(phi_step_minutes),
         phi_step=phi_step,
     )
 
@@ -119,10 +113,8 @@ def build_transport_state(
     field_half_width_steps = float(field_half_width_h) / float(time_step_hours)
     return TransportState(
         t0_ref=t0_ref,
-        phi_delay_h=phi_delay_h,
         horizon_steps=horizon_steps,
         h_step_idx=h_step_idx,
-        h_step_hours=h_step_hours,
         r_kernel_scale=r_kernel_scale,
         cr_steps=cr_steps,
         phi_delay_steps=phi_delay_steps,

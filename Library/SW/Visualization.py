@@ -9,11 +9,10 @@ from tqdm.auto import tqdm
 
 from Library.SW.Coords import find_axis_index
 
-PREDICT_COLUMN_CANDIDATES = ("v_predict", "v_model_earth")
-PREDICT_RAW_COLUMN_CANDIDATES = ("v_predict_raw", "v_model_earth_raw")
-REAL_COLUMN_CANDIDATES = ("v_real", "v_ace")
-SWX_COLUMN_CANDIDATES = ("v_swx", "forecast_sw_speed")
-MICROFORECAST_COLUMN_CANDIDATES = ("v_1cr_ago",)
+PREDICT_COLUMN = "v_predict"
+REAL_COLUMN = "v_real"
+SWX_COLUMN = "v_swx"
+MICROFORECAST_COLUMN = "v_1cr_ago"
 SAT_MARKER_SHAPES = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h", "*")
 PREDICT_LINE_COLOR = "tab:red"
 REAL_LINE_COLOR = "tab:green"
@@ -52,19 +51,7 @@ def find_phi_index(phi_axis, phi_target):
     return int(np.argmin(wrap_phi_delta(phi_axis, phi_target)))
 
 
-def first_present_column(frame, candidates):
-    for column in candidates:
-        if column in frame.columns:
-            return column
-    return None
-
-
-def resolve_comparison_frames(comparison_frames=None, earth_frame=None):
-    if comparison_frames is None:
-        assert earth_frame is not None, "Provide comparison_frames or earth_frame"
-        if isinstance(earth_frame, pd.DataFrame):
-            return {"earth": earth_frame}
-        return dict(earth_frame)
+def resolve_comparison_frames(comparison_frames):
     if isinstance(comparison_frames, pd.DataFrame):
         return {"earth": comparison_frames}
     return dict(comparison_frames)
@@ -127,12 +114,10 @@ def build_satellite_plot_items(comparison_frames):
                 "sat_name": sat_name,
                 "frame": frame,
                 "label": frame.attrs.get("label", sat_name),
-                "predict_col": first_present_column(frame, PREDICT_COLUMN_CANDIDATES),
-                "real_col": first_present_column(frame, REAL_COLUMN_CANDIDATES),
-                "swx_col": first_present_column(frame, SWX_COLUMN_CANDIDATES),
-                "microforecast_col": first_present_column(
-                    frame, MICROFORECAST_COLUMN_CANDIDATES
-                ),
+                "predict_col": PREDICT_COLUMN if PREDICT_COLUMN in frame.columns else None,
+                "real_col": REAL_COLUMN if REAL_COLUMN in frame.columns else None,
+                "swx_col": SWX_COLUMN if SWX_COLUMN in frame.columns else None,
+                "microforecast_col": MICROFORECAST_COLUMN if MICROFORECAST_COLUMN in frame.columns else None,
                 "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
             }
         )
@@ -145,23 +130,11 @@ def build_polar_speed_cmap():
     return cmap
 
 
-def resolve_polar_speed_vlims(
-    post_vlims_raw,
-    slow_sw_series,
-    backfill_empty_with_300=False,
-):
-    if backfill_empty_with_300:
-        return float(slow_sw_series.min()), float(post_vlims_raw[1])
-    return float(post_vlims_raw[0]), float(post_vlims_raw[1])
-
-
 def build_polar_speed_frame(
     grid_raw,
     slow_sw_pred_mask,
-    slow_sw_series,
     t_idx,
     draw_slow_sw=True,
-    backfill_empty_with_300=False,
     frame_buffer=None,
 ):
     if frame_buffer is None:
@@ -169,8 +142,6 @@ def build_polar_speed_frame(
 
     ti = int(t_idx)
     np.copyto(frame_buffer, grid_raw[ti].T)
-    if backfill_empty_with_300:
-        np.nan_to_num(frame_buffer, copy=False, nan=float(slow_sw_series.iloc[ti]))
     if not draw_slow_sw:
         frame_buffer[slow_sw_pred_mask[ti].T] = np.nan
     return frame_buffer
@@ -208,7 +179,7 @@ def format_polar_speed_title(current_time):
     return f"Heliosphere at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
 
 
-def configure_polar_speed_axis(ax, r_axis, r0, title_text=""):
+def configure_polar_speed_axis(ax, r_axis, title_text=""):
     title = ax.set_title(title_text, y=1.14, pad=0)
     ax.set_ylim(0.0, float(np.nanmax(r_axis)) + 1.0)
     ax.set_yticklabels([])
@@ -445,16 +416,13 @@ def build_satellite_comparison_frame(
     r_axis,
     grid_raw,
     slow_sw_pred_mask,
-    slow_sw_speed,
     df_sat=None,
     df_swx=None,
     phi_target=0.0,
     r_target=215.0,
     cr_days=27.0,
     draw_slow_sw=True,
-    backfill_empty_with_300=False,
 ):
-    slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     target_frame = build_model_target_frame(
         time_axis=time_axis,
         df_sat=df_sat,
@@ -479,8 +447,6 @@ def build_satellite_comparison_frame(
         v_predict_raw[time_idx] = raw_value
 
         model_value = raw_value
-        if backfill_empty_with_300 and np.isnan(model_value):
-            model_value = float(slow_sw_series.iloc[time_idx])
         if not draw_slow_sw and bool(slow_sw_pred_mask[time_idx, phi_idx, r_idx]):
             model_value = np.nan
         v_predict[time_idx] = model_value
@@ -519,54 +485,6 @@ def build_satellite_comparison_frame(
     return comparison_frame.sort_index()
 
 
-def build_earth_comparison_frame(
-    time_axis,
-    phi_axis,
-    r_axis,
-    grid_raw,
-    slow_sw_pred_mask,
-    slow_sw_speed,
-    df_ace_earth=None,
-    df_forecast_earth=None,
-    phi_target=0.0,
-    r_target=215.0,
-    cr_days=27.0,
-    draw_slow_sw=True,
-    backfill_empty_with_300=False,
-):
-    df_sat = None
-    if df_ace_earth is not None:
-        df_sat = df_ace_earth.rename(columns={"v_ace": "v"})
-        df_sat.attrs.update(df_ace_earth.attrs)
-    df_swx = None
-    if df_forecast_earth is not None:
-        df_swx = df_forecast_earth.rename(columns={"forecast_sw_speed": "v_swx"})
-        df_swx.attrs.update(df_forecast_earth.attrs)
-
-    earth_frame = build_satellite_comparison_frame(
-        time_axis=time_axis,
-        phi_axis=phi_axis,
-        r_axis=r_axis,
-        grid_raw=grid_raw,
-        slow_sw_pred_mask=slow_sw_pred_mask,
-        slow_sw_speed=slow_sw_speed,
-        df_sat=df_sat,
-        df_swx=df_swx,
-        phi_target=phi_target,
-        r_target=r_target,
-        cr_days=cr_days,
-        draw_slow_sw=draw_slow_sw,
-        backfill_empty_with_300=backfill_empty_with_300,
-    )
-    return earth_frame.rename(
-        columns={
-            "v_predict_raw": "v_model_earth_raw",
-            "v_predict": "v_model_earth",
-            "v_real": "v_ace",
-            "v_swx": "forecast_sw_speed",
-        }
-    )
-
 
 def plot_polar_snapshot(
     date_str,
@@ -576,35 +494,22 @@ def plot_polar_snapshot(
     grid_raw,
     post_vlims_raw,
     slow_sw_pred_mask,
-    time_step_hours,
     slow_sw_speed,
-    r0,
     comparison_frames=None,
-    earth_frame=None,
     draw_slow_sw=True,
-    backfill_empty_with_300=False,
     cr_days=27.0,
 ):
     slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
-    comparison_frames = resolve_comparison_frames(
-        comparison_frames=comparison_frames,
-        earth_frame=earth_frame,
-    )
+    comparison_frames = resolve_comparison_frames(comparison_frames)
     sat_items = build_satellite_plot_items(comparison_frames)
     current_time = pd.Timestamp(date_str)
     t_idx = int(pd.DatetimeIndex(time_axis).get_loc(current_time))
-    vmin_mode, vmax_mode = resolve_polar_speed_vlims(
-        post_vlims_raw=post_vlims_raw,
-        slow_sw_series=slow_sw_series,
-        backfill_empty_with_300=backfill_empty_with_300,
-    )
+    vmin_mode, vmax_mode = float(post_vlims_raw[0]), float(post_vlims_raw[1])
     frame_data = build_polar_speed_frame(
         grid_raw=grid_raw,
         slow_sw_pred_mask=slow_sw_pred_mask,
-        slow_sw_series=slow_sw_series,
         t_idx=t_idx,
         draw_slow_sw=draw_slow_sw,
-        backfill_empty_with_300=backfill_empty_with_300,
     )
     if not np.isfinite(frame_data).any():
         print(f"No data for {date_str} with current display settings")
@@ -648,7 +553,6 @@ def plot_polar_snapshot(
     configure_polar_speed_axis(
         ax=ax,
         r_axis=r_axis,
-        r0=r0,
         title_text=format_polar_speed_title(current_time),
     )
     add_satellite_polar_markers(ax=ax, sat_items=sat_items)
@@ -681,25 +585,17 @@ def export_polar_animation(
     slow_sw_pred_mask,
     time_step_minutes,
     slow_sw_speed,
-    r0,
     cr_days,
     comparison_frames=None,
-    earth_frame=None,
     draw_slow_sw=True,
-    backfill_empty_with_300=False,
     anim_fps=30,
     anim_1h_mult=1.0,
     anim_dpi=100,
-    anim_plot_style="mesh",
     show_progress=True,
 ):
-    assert anim_plot_style == "mesh"
     assert float(anim_1h_mult) > 0.0
     slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
-    comparison_frames = resolve_comparison_frames(
-        comparison_frames=comparison_frames,
-        earth_frame=earth_frame,
-    )
+    comparison_frames = resolve_comparison_frames(comparison_frames)
 
     output_path = Path(anim_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -707,11 +603,7 @@ def export_polar_animation(
     frame_interval_minutes = 60.0 * float(anim_1h_mult)
     anim_stride = max(1, int(round(frame_interval_minutes / float(time_step_minutes))))
 
-    anim_vmin, anim_vmax = resolve_polar_speed_vlims(
-        post_vlims_raw=post_vlims_raw,
-        slow_sw_series=slow_sw_series,
-        backfill_empty_with_300=backfill_empty_with_300,
-    )
+    anim_vmin, anim_vmax = float(post_vlims_raw[0]), float(post_vlims_raw[1])
 
     frame_idx = np.arange(0, len(time_axis), anim_stride, dtype=np.int32)
     window_before_days = float(cr_days - 7.0)
@@ -752,10 +644,8 @@ def export_polar_animation(
     build_polar_speed_frame(
         grid_raw=grid_raw,
         slow_sw_pred_mask=slow_sw_pred_mask,
-        slow_sw_series=slow_sw_series,
         t_idx=init_t,
         draw_slow_sw=draw_slow_sw,
-        backfill_empty_with_300=backfill_empty_with_300,
         frame_buffer=frame_buf_2d,
     )
     artist = draw_polar_speed_mesh(
@@ -769,7 +659,6 @@ def export_polar_animation(
     title = configure_polar_speed_axis(
         ax=ax,
         r_axis=r_axis,
-        r0=r0,
         title_text=format_polar_speed_title(time_axis[init_t]),
     )
 
@@ -823,10 +712,8 @@ def export_polar_animation(
             build_polar_speed_frame(
                 grid_raw=grid_raw,
                 slow_sw_pred_mask=slow_sw_pred_mask,
-                slow_sw_series=slow_sw_series,
                 t_idx=ti,
                 draw_slow_sw=draw_slow_sw,
-                backfill_empty_with_300=backfill_empty_with_300,
                 frame_buffer=frame_buf_2d,
             )
             update_polar_speed_mesh(artist=artist, frame_data=frame_buf_2d)

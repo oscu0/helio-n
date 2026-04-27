@@ -87,12 +87,6 @@ def parse_args(argv):
         help="Skip Earth-series parquet export.",
     )
     parser.add_argument(
-        "--animation-style",
-        choices=["mesh", "scatter"],
-        default="mesh",
-        help="Polar animation rendering style.",
-    )
-    parser.add_argument(
         "--animation-fps",
         type=int,
         default=30,
@@ -201,10 +195,8 @@ def main(argv):
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),
-        use_cr_reset=ballistic["use_cr_reset"],
     )
     (
-        _seed_times,
         seed_vals,
         v_prev,
         v_next,
@@ -237,8 +229,6 @@ def main(argv):
         n_r=len(grid.r_axis),
         max_flat=accumulators.max_flat,
         cr_flat=accumulators.cr_flat,
-        use_swept_cell=ballistic["use_swept_cell"],
-        use_cr_reset=ballistic["use_cr_reset"],
         max_seed_batch=runtime["max_seed_batch"],
     )
     print(
@@ -280,14 +270,12 @@ def main(argv):
             r_axis=grid.r_axis,
             grid_raw=post.V_grid,
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
-            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
             df_sat=df_sat,
             df_swx=satellite_swx_frames.get(sat_name),
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
             cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
-            backfill_empty_with_300=False,
         )
     primary_sat = plot_sats[0]["sat"]
     primary_frame = comparison_frames[primary_sat]
@@ -304,27 +292,25 @@ def main(argv):
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             comparison_frames=comparison_frames,
             time_step_minutes=time_step_minutes,
-            superresolution_enabled=superresolution_enabled,
             slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
-            r0=ballistic["r0"],
             cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
-            backfill_empty_with_300=False,
             anim_fps=args.animation_fps,
             anim_dpi=(
                 runtime["animation_dpi"]
                 if args.animation_dpi is None
                 else args.animation_dpi
             ),
-            anim_plot_style=args.animation_style,
         )
         print(
             "Saved animation:",
             animation_out,
             "| frames:",
             int(animation_stats["frames"]),
-            "| achieved speedup:",
-            f"{animation_stats['achieved_speedup']:.2f}x",
+            "| stride:",
+            int(animation_stats["stride"]),
+            "| fps:",
+            int(animation_stats["fps"]),
         )
 
     if not args.skip_parquet:

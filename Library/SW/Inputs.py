@@ -108,8 +108,6 @@ def load_sw_input_from_sql(
                 frames.append(pd.DataFrame(rows, columns=columns))
     conn.close()
 
-    if columns is None:
-        return pd.DataFrame()
     if not frames:
         return pd.DataFrame(columns=columns)
     return pd.concat(frames, ignore_index=True)
@@ -234,10 +232,6 @@ def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
     )
 
 
-def v_from_area(area, empirical, t=None):
-    return empirical.v_from_area(area, t=t)
-
-
 def build_model_input_series(
     sdo_input_df,
     empirical,
@@ -262,9 +256,8 @@ def build_model_input_series(
     ), "No valid SW input rows remain after filtering and CH-area normalization"
 
     launch_time = (prepared_input["dt"] + pd.Timedelta(minutes=30)).dt.floor("1h")
-    prepared_input["v_empirical"] = v_from_area(
+    prepared_input["v_empirical"] = empirical.v_from_area(
         prepared_input["ch_relative_area"].to_numpy(dtype=float),
-        empirical=empirical,
         t=launch_time,
     )
     df_v = (
@@ -328,10 +321,6 @@ def build_ace_earth_swx_frame(sdo_input_df):
     if "forecast_sw_speed" in sdo_input_df.columns:
         df_swx["v_swx"] = pd.to_numeric(
             sdo_input_df["forecast_sw_speed"], errors="coerce"
-        ).to_numpy()
-    elif "sw_speed_1" in sdo_input_df.columns:
-        df_swx["v_swx"] = pd.to_numeric(
-            sdo_input_df["sw_speed_1"], errors="coerce"
         ).to_numpy()
     df_swx.attrs["sat"] = DEFAULT_ACE_EARTH_SAT
     df_swx.attrs["label"] = DEFAULT_ACE_EARTH_LABEL

@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from Library.Config import hostname, machine_config, machines, override_machine
-from Library.SW.CH_SW_Model import CHSWModel
+from Library.Config import hostname, machine_config
+from Library.SW.CH_SW_Model import load_ch_sw_model
 
 MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MODULE_DIR.parent.parent
@@ -24,23 +24,14 @@ def load_json_config(path):
         return json.load(handle)
 
 
-def _resolved_machine_name():
-    candidate = override_machine if override_machine else hostname
-    if candidate in machines:
-        return candidate
-    return next(iter(machines))
+def load_empirical_spec():
+    return load_ch_sw_model(SW_MODEL_DIR / "Shugay.py")
 
 
-def load_empirical_spec(path=None):
-    config_path = Path(path) if path is not None else SW_MODEL_DIR / "Shugay.py"
-    return CHSWModel.load(config_path)
-
-
-def load_ballistic_spec(path=None):
-    config_path = Path(path) if path is not None else SW_CONFIG_DIR / "Ballistic.json"
-    raw = load_json_config(config_path)
+def load_ballistic_spec():
+    raw = load_json_config(SW_CONFIG_DIR / "Ballistic.json")
     return {
-        "json_path": config_path,
+        "json_path": SW_CONFIG_DIR / "Ballistic.json",
         "superresolution_enabled": bool(raw["superresolution_enabled"]),
         "superresolution_step_minutes": int(raw["superresolution_step_minutes"]),
         "base_time_step_minutes": int(raw["base_time_step_minutes"]),
@@ -55,26 +46,17 @@ def load_ballistic_spec(path=None):
         "use_cr_reset": bool(raw["use_cr_reset"]),
         "memory_guard_enabled": bool(raw["memory_guard_enabled"]),
         "simulation_pad_days": float(raw["simulation_pad_days"]),
-        "plot_phi_target": float(raw["plot_phi_target"]),
         "earth_phi_target": float(raw["earth_phi_target"]),
         "earth_r_target": float(raw["earth_r_target"]),
     }
 
 
-def load_sw_runtime_spec(current_machine_config=None, machine_name=None):
+def load_sw_runtime_spec():
     runtime = dict(SW_RUNTIME_DEFAULTS)
-    machine = (
-        machine_config if current_machine_config is None else current_machine_config
-    )
-    runtime.update(machine.get("sw", {}))
-    resolved_machine_name = (
-        _resolved_machine_name()
-        if current_machine_config is None and machine_name is None
-        else (machine_name if machine_name is not None else "<override>")
-    )
+    runtime.update(machine_config.get("sw", {}))
     return {
         "machine_json_path": MACHINE_CONFIG_PATH,
-        "machine_name": resolved_machine_name,
+        "machine_name": hostname,
         "dense_memory_budget_gb": float(runtime["dense_memory_budget_gb"]),
         "max_seed_batch": int(runtime["max_seed_batch"]),
         "post_chunk_t": int(runtime["post_chunk_t"]),
