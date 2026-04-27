@@ -285,6 +285,7 @@ def main(argv):
             df_swx=satellite_swx_frames.get(sat_name),
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
+            cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
             backfill_empty_with_300=False,
         )

@@ -13,10 +13,12 @@ PREDICT_COLUMN_CANDIDATES = ("v_predict", "v_model_earth")
 PREDICT_RAW_COLUMN_CANDIDATES = ("v_predict_raw", "v_model_earth_raw")
 REAL_COLUMN_CANDIDATES = ("v_real", "v_ace")
 SWX_COLUMN_CANDIDATES = ("v_swx", "forecast_sw_speed")
+MICROFORECAST_COLUMN_CANDIDATES = ("v_1cr_ago",)
 SAT_MARKER_SHAPES = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h", "*")
 PREDICT_LINE_COLOR = "tab:red"
 REAL_LINE_COLOR = "tab:green"
 SWX_LINE_COLOR = "tab:orange"
+MICROFORECAST_LINE_COLOR = "tab:blue"
 SLOW_SW_LINE_COLOR = "tab:gray"
 
 
@@ -66,6 +68,16 @@ def resolve_comparison_frames(comparison_frames=None, earth_frame=None):
     if isinstance(comparison_frames, pd.DataFrame):
         return {"earth": comparison_frames}
     return dict(comparison_frames)
+
+
+def build_1cr_ago_microforecast_frame(df_sat, cr_days):
+    assert df_sat is not None
+    assert "v" in df_sat.columns
+
+    shifted_index = pd.DatetimeIndex(df_sat.index) + pd.Timedelta(days=float(cr_days))
+    df_microforecast = pd.DataFrame(index=shifted_index)
+    df_microforecast["v_1cr_ago"] = pd.to_numeric(df_sat["v"], errors="coerce").to_numpy()
+    return df_microforecast.sort_index()
 
 
 def marker_radius_for_plot(r_value, r_axis):
@@ -118,6 +130,9 @@ def build_satellite_plot_items(comparison_frames):
                 "predict_col": first_present_column(frame, PREDICT_COLUMN_CANDIDATES),
                 "real_col": first_present_column(frame, REAL_COLUMN_CANDIDATES),
                 "swx_col": first_present_column(frame, SWX_COLUMN_CANDIDATES),
+                "microforecast_col": first_present_column(
+                    frame, MICROFORECAST_COLUMN_CANDIDATES
+                ),
                 "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
             }
         )
@@ -243,6 +258,7 @@ def resolve_satellite_panel_ylim(sat_items):
             sat_item["predict_col"],
             sat_item["real_col"],
             sat_item["swx_col"],
+            sat_item["microforecast_col"],
         ):
             if column is None:
                 continue
@@ -279,14 +295,16 @@ def update_satellite_panel_windows(
                 compare_window[sat_item["predict_col"]].values,
             )
         if sat_item["real_line"] is not None:
-            sat_item["real_line"].set_data(
-                compare_window.index,
-                compare_window[sat_item["real_col"]].values,
-            )
+            _real = compare_window[sat_item["real_col"]].dropna()
+            sat_item["real_line"].set_data(_real.index, _real.values)
         if sat_item["swx_line"] is not None:
-            sat_item["swx_line"].set_data(
-                compare_window.index,
-                compare_window[sat_item["swx_col"]].values,
+            _swx = compare_window[sat_item["swx_col"]].dropna()
+            sat_item["swx_line"].set_data(_swx.index, _swx.values)
+        if sat_item["microforecast_line"] is not None:
+            _microforecast = compare_window[sat_item["microforecast_col"]].dropna()
+            sat_item["microforecast_line"].set_data(
+                _microforecast.index,
+                _microforecast.values,
             )
         slow_sw_window = slow_sw_series.loc[window_start:window_end]
         sat_item["slow_sw_line"].set_data(slow_sw_window.index, slow_sw_window.values)
@@ -309,6 +327,7 @@ def initialize_satellite_panels(
         sat_item["predict_line"] = None
         sat_item["real_line"] = None
         sat_item["swx_line"] = None
+        sat_item["microforecast_line"] = None
         sat_item["slow_sw_line"] = None
         sat_item["time_marker"] = sat_axis.axvline(
             current_time,
@@ -333,8 +352,8 @@ def initialize_satellite_panels(
                 color=REAL_LINE_COLOR,
                 linewidth=1.4,
                 alpha=0.95,
-                linestyle="--",
-                label="v_real",
+                linestyle="-",
+                label="v_obs",
             )
         if sat_item["swx_col"] is not None:
             (sat_item["swx_line"],) = sat_axis.plot(
@@ -343,8 +362,18 @@ def initialize_satellite_panels(
                 color=SWX_LINE_COLOR,
                 linewidth=1.35,
                 alpha=0.95,
-                linestyle=":",
+                linestyle="-",
                 label="v_swx",
+            )
+        if sat_item["microforecast_col"] is not None:
+            (sat_item["microforecast_line"],) = sat_axis.plot(
+                [],
+                [],
+                color=MICROFORECAST_LINE_COLOR,
+                linewidth=1.25,
+                alpha=0.95,
+                linestyle="--",
+                label="1CR microforecast",
             )
         (sat_item["slow_sw_line"],) = sat_axis.plot(
             slow_sw_series.index,
@@ -353,7 +382,7 @@ def initialize_satellite_panels(
             linestyle="-.",
             linewidth=1.0,
             alpha=0.75,
-            label="slow SW",
+            label="v_min",
         )
         sat_axis.set_ylabel("v (km/s)")
         sat_axis.set_title(
@@ -421,6 +450,7 @@ def build_satellite_comparison_frame(
     df_swx=None,
     phi_target=0.0,
     r_target=215.0,
+    cr_days=27.0,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
 ):
@@ -468,12 +498,19 @@ def build_satellite_comparison_frame(
             df_sat[["v"]].rename(columns={"v": "v_real"}),
             how="outer",
         )
+        comparison_frame["v_real"] = comparison_frame["v_real"].interpolate(method="time")
+        df_microforecast = build_1cr_ago_microforecast_frame(df_sat=df_sat, cr_days=cr_days)
+        comparison_frame = comparison_frame.join(df_microforecast, how="outer")
+        comparison_frame["v_1cr_ago"] = comparison_frame["v_1cr_ago"].interpolate(
+            method="time"
+        )
     if df_sat is not None and "lat_hgs" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
     if df_sat is not None and "lat_hge" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hge"]], how="left")
     if df_swx is not None and "v_swx" in df_swx.columns:
         comparison_frame = comparison_frame.join(df_swx[["v_swx"]], how="outer")
+        comparison_frame["v_swx"] = comparison_frame["v_swx"].interpolate(method="time")
 
     if df_sat is not None:
         comparison_frame.attrs.update(df_sat.attrs)
@@ -493,6 +530,7 @@ def build_earth_comparison_frame(
     df_forecast_earth=None,
     phi_target=0.0,
     r_target=215.0,
+    cr_days=27.0,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
 ):
@@ -516,6 +554,7 @@ def build_earth_comparison_frame(
         df_swx=df_swx,
         phi_target=phi_target,
         r_target=r_target,
+        cr_days=cr_days,
         draw_slow_sw=draw_slow_sw,
         backfill_empty_with_300=backfill_empty_with_300,
     )
@@ -641,7 +680,6 @@ def export_polar_animation(
     post_vlims_raw,
     slow_sw_pred_mask,
     time_step_minutes,
-    superresolution_enabled,
     slow_sw_speed,
     r0,
     cr_days,
@@ -649,16 +687,14 @@ def export_polar_animation(
     earth_frame=None,
     draw_slow_sw=True,
     backfill_empty_with_300=False,
-    target_speedup_vs_baseline=10.0,
-    baseline_fps=12.0,
     anim_fps=30,
-    speedup_multiplier=2.0,
-    superres_reference_minutes=10.0,
+    anim_1h_mult=1.0,
     anim_dpi=100,
     anim_plot_style="mesh",
     show_progress=True,
 ):
     assert anim_plot_style == "mesh"
+    assert float(anim_1h_mult) > 0.0
     slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     comparison_frames = resolve_comparison_frames(
         comparison_frames=comparison_frames,
@@ -668,27 +704,8 @@ def export_polar_animation(
     output_path = Path(anim_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    base_stride = max(
-        1,
-        int(
-            round(
-                float(target_speedup_vs_baseline)
-                * float(baseline_fps)
-                / float(anim_fps)
-            )
-        ),
-    )
-    if superresolution_enabled:
-        superres_stride_factor = float(superres_reference_minutes) / float(
-            time_step_minutes
-        )
-    else:
-        superres_stride_factor = 1.0
-    anim_stride = max(
-        1,
-        int(round(base_stride * superres_stride_factor * float(speedup_multiplier))),
-    )
-    achieved_speedup = (anim_stride * float(anim_fps)) / float(baseline_fps)
+    frame_interval_minutes = 60.0 * float(anim_1h_mult)
+    anim_stride = max(1, int(round(frame_interval_minutes / float(time_step_minutes))))
 
     anim_vmin, anim_vmax = resolve_polar_speed_vlims(
         post_vlims_raw=post_vlims_raw,
@@ -832,6 +849,6 @@ def export_polar_animation(
     return {
         "frames": float(len(frame_idx)),
         "stride": float(anim_stride),
+        "frame_interval_minutes": float(anim_stride * float(time_step_minutes)),
         "fps": float(anim_fps),
-        "achieved_speedup": float(achieved_speedup),
     }
