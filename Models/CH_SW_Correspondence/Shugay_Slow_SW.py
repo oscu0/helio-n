@@ -50,7 +50,7 @@ def shugay_slow_sw_vmin_factory(v_ace):
     return shugay_slow_sw_vmin
 
 
-MODEL = EmpiricalCHSWModel.from_fields(
+MODEL = EmpiricalCHSWModel(
     source_path=Path(__file__).resolve(),
     v_min=shugay_slow_sw_vmin_factory(load_ace_speed_series()),
     a=180.0,

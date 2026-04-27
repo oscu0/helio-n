@@ -2,7 +2,7 @@ from pathlib import Path
 
 from Library.SW.CH_SW_Model import EmpiricalCHSWModel
 
-MODEL = EmpiricalCHSWModel.from_fields(
+MODEL = EmpiricalCHSWModel(
     source_path=Path(__file__).resolve(),
     v_min=300.0,
     a=180.0,

@@ -48,20 +48,6 @@ def compute_rotation_state(cr_days, phi_step_minutes):
     )
 
 
-def estimate_dense_memory_gb(n_cells):
-    bytes_core = int(n_cells) * 4
-    return (bytes_core * 1.6) / 1e9
-
-
-def resolve_phi_axis(phi_step, phi_values=None):
-    if phi_values is None:
-        return np.arange(0.0, 360.0, phi_step, dtype=float)
-
-    phi_axis = np.asarray(phi_values, dtype=float).reshape(-1)
-    assert phi_axis.size > 0, "phi_values must contain at least one target phi"
-    return np.mod(phi_axis, 360.0)
-
-
 def build_grid_axes(
     sim_start,
     sim_end,
@@ -74,10 +60,14 @@ def build_grid_axes(
     phi_values=None,
 ):
     time_axis = pd.date_range(sim_start, sim_end, freq=time_freq)
-    phi_axis = resolve_phi_axis(phi_step=phi_step, phi_values=phi_values)
+    if phi_values is None:
+        phi_axis = np.arange(0.0, 360.0, phi_step, dtype=float)
+    else:
+        phi_axis = np.mod(np.asarray(phi_values, dtype=float).reshape(-1), 360.0)
+        assert phi_axis.size > 0, "phi_values must contain at least one target phi"
     r_axis = np.arange(int(r0), int(r_max) + 1, 1, dtype=np.int16)
     n_cells = int(len(time_axis) * len(phi_axis) * len(r_axis))
-    est_runtime_gb = estimate_dense_memory_gb(n_cells)
+    est_runtime_gb = (n_cells * 4 * 1.6) / 1e9
     if memory_guard_enabled:
         assert est_runtime_gb <= float(dense_memory_budget_gb), (
             f"Estimated memory {est_runtime_gb:.2f} GB exceeds budget "
@@ -122,17 +112,6 @@ def build_transport_state(
     )
 
 
-def radius_path_for_speed(v_i, r_kernel_scale, r0):
-    return np.rint(float(v_i) * r_kernel_scale + int(r0)).astype(np.int32)
-
-
-def seed_time_index(t0, t0_ref, time_freq, time_step_hours):
-    return int(
-        (pd.Timestamp(t0).floor(time_freq) - t0_ref)
-        / pd.Timedelta(hours=float(time_step_hours))
-    )
-
-
 def build_packet_geometry(phi_delay_steps, field_half_width_steps):
     packet_width_steps = 2.0 * float(field_half_width_steps)
     packet_p_list = []
@@ -157,7 +136,3 @@ def build_packet_geometry(phi_delay_steps, field_half_width_steps):
         np.asarray(packet_off_list, dtype=np.int32),
         np.asarray(packet_alpha_list, dtype=np.float32),
     )
-
-
-def find_axis_index(axis_values, target):
-    return int(np.argmin(np.abs(axis_values - float(target))))

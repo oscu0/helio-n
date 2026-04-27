@@ -38,12 +38,6 @@ DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
 SATELLITE_FRAME_COLUMNS = [
     "v",
-    "v_gse_x",
-    "v_gse_y",
-    "v_gse_z",
-    "x_gse",
-    "y_gse",
-    "z_gse",
     "phi_target",
     "r_target",
     "lat_hgs",
@@ -207,10 +201,7 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
     df_sat = df_sat[keep_columns].sort_index()
     df_sat = df_sat[~df_sat.index.duplicated(keep="last")]
 
-    numeric_columns = [
-        column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns
-    ]
-    for column in numeric_columns:
+    for column in keep_columns:
         df_sat[column] = pd.to_numeric(df_sat[column], errors="coerce")
 
     df_sat.attrs["sat"] = str(sat)
@@ -268,7 +259,7 @@ def build_model_input_series(
         .sort_index()
     )
 
-    df_ch_area_hourly = (
+    df_ch_area = (
         pd.DataFrame(
             {
                 "time": launch_time,
@@ -288,12 +279,9 @@ def build_model_input_series(
             freq=time_freq,
         )
         df_v = df_v.reindex(sr_index).interpolate(method="time").ffill().bfill()
-        df_ch_area = df_ch_area_hourly.reindex(sr_index).ffill().bfill()
+        df_ch_area = df_ch_area.reindex(sr_index).ffill().bfill()
         df_v.index.name = "time"
-        df_ch_area_hourly.index.name = "time"
         df_ch_area.index.name = "time"
-    else:
-        df_ch_area = df_ch_area_hourly.copy()
 
     sim_start = df_v.index.min().floor(time_freq)
     sim_end = (df_v.index.max() + pd.Timedelta(days=float(simulation_pad_days))).ceil(
@@ -303,7 +291,6 @@ def build_model_input_series(
     return {
         "sdo_input_df": prepared_input,
         "df_v": df_v,
-        "df_ch_area_hourly": df_ch_area_hourly,
         "df_ch_area": df_ch_area,
         "sim_start": sim_start,
         "sim_end": sim_end,
@@ -325,9 +312,3 @@ def build_ace_earth_swx_frame(sdo_input_df):
     df_swx.attrs["sat"] = DEFAULT_ACE_EARTH_SAT
     df_swx.attrs["label"] = DEFAULT_ACE_EARTH_LABEL
     return df_swx.sort_index()
-
-
-def build_forecast_earth_frame(sdo_input_df):
-    return build_ace_earth_swx_frame(sdo_input_df).rename(
-        columns={"v_swx": "forecast_sw_speed"}
-    )

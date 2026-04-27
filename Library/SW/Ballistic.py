@@ -10,21 +10,15 @@ from Library.SW.Coords import (
     build_grid_axes,
     build_packet_geometry,
     build_transport_state,
-    GridState,
-    TransportState,
-    radius_path_for_speed,
-    seed_time_index,
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class AccumulatorState:
-    """Dense accumulation arrays and flattened views used by Numba kernels."""
+    """Dense accumulation arrays."""
 
-    V_accum_max: np.ndarray
-    V_accum_cr_idx: np.ndarray
-    cr_flat: np.ndarray
-    max_flat: np.ndarray
+    V_accum_max: np.ndarray  # (n_t, n_p, n_r) float32, NaN-initialized
+    cr_flat: np.ndarray  # 1D int32, -1-initialized; tracks last-touching CR per cell
 
 
 @dataclass(frozen=True)
@@ -46,26 +40,10 @@ class PostProcessingState:
     max_vlims_raw: tuple[float, float]
 
 
-@dataclass(frozen=True)
-class PhiPropagationState:
-    """Sparse-phi propagation result using the standard dense solver."""
-
-    grid: GridState
-    transport: TransportState
-    accumulators: AccumulatorState
-    stats: PropagationStats
-
-
 def init_accumulators(n_t, n_p, n_r):
     V_accum_max = np.full((n_t, n_p, n_r), np.nan, dtype=np.float32)
-    V_accum_cr_idx = np.full((n_t, n_p, n_r), -1, dtype=np.int32)
-    cr_flat = V_accum_cr_idx.ravel()
-    return AccumulatorState(
-        V_accum_max=V_accum_max,
-        V_accum_cr_idx=V_accum_cr_idx,
-        cr_flat=cr_flat,
-        max_flat=V_accum_max.ravel(),
-    )
+    cr_flat = np.full(n_t * n_p * n_r, -1, dtype=np.int32)
+    return AccumulatorState(V_accum_max=V_accum_max, cr_flat=cr_flat)
 
 
 def prepare_seed_inputs(
@@ -87,25 +65,14 @@ def prepare_seed_inputs(
     v_next[-1] = seed_vals[-1]
     v_next[:-1] = seed_vals[1:]
 
-    seed_t_idx = np.array(
-        [
-            seed_time_index(
-                t0=t0,
-                t0_ref=t0_ref,
-                time_freq=time_freq,
-                time_step_hours=time_step_hours,
-            )
-            for t0 in df_v_run.index
-        ],
-        dtype=np.int32,
-    )
-    seed_cr_idx_arr = seed_t_idx // int(cr_steps)
-    seed_r_idx = np.empty((len(seed_vals), horizon_steps), dtype=np.int16)
-    for idx, v_i in enumerate(seed_vals):
-        seed_r_idx[idx] = (
-            radius_path_for_speed(v_i=float(v_i), r_kernel_scale=r_kernel_scale, r0=r0)
-            - int(r0)
-        ).astype(np.int16)
+    seed_index_floor = pd.DatetimeIndex(df_v_run.index).floor(time_freq)
+    delta_hours = (seed_index_floor - t0_ref) / pd.Timedelta(hours=float(time_step_hours))
+    seed_t_idx = np.asarray(delta_hours, dtype=np.int64).astype(np.int32)
+    seed_cr_idx_arr = (seed_t_idx // int(cr_steps)).astype(np.int32)
+
+    seed_r_idx = np.rint(
+        seed_vals[:, None].astype(np.float64) * r_kernel_scale[None, :]
+    ).astype(np.int16)
 
     return (
         seed_vals,
@@ -153,10 +120,8 @@ def deposit_run_cr(
                 if cr_flat[idx] != seed_cr_idx:
                     cr_flat[idx] = seed_cr_idx
                     max_flat[idx] = vv
-                else:
-                    cur = max_flat[idx]
-                    if np.isnan(cur) or vv > cur:
-                        max_flat[idx] = vv
+                elif vv > max_flat[idx]:
+                    max_flat[idx] = vv
 
 
 @nb.njit(cache=True)
@@ -220,8 +185,31 @@ def propagate_swept_cr_batch(
             lo = ra if ra <= rb else rb
             hi = rb if ra <= rb else ra
 
-            valid = (lo <= (n_r - 1)) and (hi >= 0)
-            if not valid:
+            if lo > (n_r - 1):
+                if run_active:
+                    deposit_run_cr(
+                        t_seed,
+                        seed_cr_idx,
+                        run_start,
+                        k,
+                        run_lo,
+                        run_hi,
+                        h_step_idx,
+                        packet_off,
+                        packet_p,
+                        packet_alpha,
+                        n_t,
+                        n_p,
+                        n_r,
+                        v_left,
+                        dv,
+                        max_flat,
+                        cr_flat,
+                    )
+                    run_active = False
+                break
+
+            if hi < 0:
                 if run_active:
                     deposit_run_cr(
                         t_seed,
@@ -317,11 +305,12 @@ def run_bulk_propagation(
     n_t,
     n_p,
     n_r,
-    max_flat,
+    V_accum_max,
     cr_flat,
     max_seed_batch,
     show_progress=True,
 ):
+    max_flat = V_accum_max.ravel()
     prop_start = time.perf_counter()
     n_seed = len(seed_vals)
     n_batches = (n_seed + int(max_seed_batch) - 1) // int(max_seed_batch)
@@ -418,7 +407,10 @@ def propagate_phi_targets(
     phi_targets,
     show_progress=True,
 ):
-    """Run the standard propagation pipeline on a sparse set of target phis."""
+    """Run the standard propagation pipeline on a sparse set of target phis.
+
+    Returns (grid, transport, accumulators, stats).
+    """
 
     grid = build_grid_axes(
         sim_start=sim_start,
@@ -480,14 +472,9 @@ def propagate_phi_targets(
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),
-        max_flat=accumulators.max_flat,
+        V_accum_max=accumulators.V_accum_max,
         cr_flat=accumulators.cr_flat,
         max_seed_batch=max_seed_batch,
         show_progress=show_progress,
     )
-    return PhiPropagationState(
-        grid=grid,
-        transport=transport,
-        accumulators=accumulators,
-        stats=stats,
-    )
+    return grid, transport, accumulators, stats

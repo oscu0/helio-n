@@ -101,13 +101,6 @@ def parse_args(argv):
     return parser.parse_args(argv[1:])
 
 
-def default_output_paths(output_dir, start_dt, end_dt):
-    stamp = f"{start_dt:%Y%m%d_%H%M}-{end_dt:%Y%m%d_%H%M}"
-    animation_out = output_dir / f"SW Polar Animation {stamp}.mp4"
-    parquet_out = output_dir / f"SW Earth Series {stamp}.parquet"
-    return animation_out, parquet_out
-
-
 def main(argv):
     args = parse_args(argv)
     start_dt = pd.Timestamp(args.start)
@@ -127,18 +120,16 @@ def main(argv):
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    default_animation_out, default_parquet_out = default_output_paths(
-        output_dir=output_dir,
-        start_dt=start_dt,
-        end_dt=end_dt,
-    )
+    stamp = f"{start_dt:%Y%m%d_%H%M}-{end_dt:%Y%m%d_%H%M}"
     animation_out = (
         Path(args.animation_out)
         if args.animation_out is not None
-        else default_animation_out
+        else output_dir / f"SW Polar Animation {stamp}.mp4"
     )
     parquet_out = (
-        Path(args.parquet_out) if args.parquet_out is not None else default_parquet_out
+        Path(args.parquet_out)
+        if args.parquet_out is not None
+        else output_dir / f"SW Earth Series {stamp}.parquet"
     )
 
     df_sdo_sw = load_sw_input_frame(
@@ -227,7 +218,7 @@ def main(argv):
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),
-        max_flat=accumulators.max_flat,
+        V_accum_max=accumulators.V_accum_max,
         cr_flat=accumulators.cr_flat,
         max_seed_batch=runtime["max_seed_batch"],
     )
