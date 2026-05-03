@@ -16,7 +16,9 @@ PREDICT_LINE_COLOR = "tab:red"
 REAL_LINE_COLOR = "tab:green"
 SWX_LINE_COLOR = "tab:orange"
 MICROFORECAST_LINE_COLOR = "tab:blue"
-SLOW_SW_LINE_COLOR = "tab:gray"
+AU_KM = 149597870.7
+SECONDS_PER_DAY = 86400.0
+AGE_SAMPLE_TOLERANCE = pd.Timedelta(hours=12)
 
 
 def find_axis_index(axis_values, target):
@@ -48,6 +50,8 @@ def build_satellite_comparison_frame(
     r_target=215.0,
     cr_days=27.0,
     draw_slow_sw=True,
+    slow_sw_speed=None,
+    slow_sw_patch=True,
 ):
     target_frame = pd.DataFrame(index=pd.DatetimeIndex(time_axis))
     if df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
@@ -64,6 +68,7 @@ def build_satellite_comparison_frame(
 
     v_predict_raw = np.full(len(time_axis), np.nan, dtype=float)
     v_predict = np.full(len(time_axis), np.nan, dtype=float)
+    slow_sw_target_mask = np.zeros(len(time_axis), dtype=bool)
     for time_idx, (phi_value, r_value) in enumerate(
         zip(
             target_frame["phi_target"].to_numpy(dtype=float),
@@ -78,8 +83,11 @@ def build_satellite_comparison_frame(
         raw_value = float(grid_raw[time_idx, phi_idx, r_idx])
         v_predict_raw[time_idx] = raw_value
 
+        is_slow_sw = bool(slow_sw_pred_mask[time_idx, phi_idx, r_idx])
+        slow_sw_target_mask[time_idx] = is_slow_sw
+
         model_value = raw_value
-        if not draw_slow_sw and bool(slow_sw_pred_mask[time_idx, phi_idx, r_idx]):
+        if not draw_slow_sw and is_slow_sw:
             model_value = np.nan
         v_predict[time_idx] = model_value
 
@@ -97,6 +105,23 @@ def build_satellite_comparison_frame(
             how="outer",
         )
         comparison_frame["v_real"] = comparison_frame["v_real"].interpolate(method="time")
+        if slow_sw_patch and df_sat.attrs.get("sat") == "ace_earth":
+            assert slow_sw_speed is not None, "slow_sw_patch requires slow_sw_speed for ACE @ Earth"
+            slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
+            patch_mask = pd.Series(
+                slow_sw_target_mask,
+                index=pd.DatetimeIndex(time_axis),
+                name="slow_sw_patch_mask",
+            ).reindex(comparison_frame.index, fill_value=False)
+            patch_values = (
+                slow_sw_series.reindex(comparison_frame.index)
+                .interpolate(method="time")
+                .ffill()
+                .bfill()
+            )
+            comparison_frame["v_real_unpatched"] = comparison_frame["v_real"]
+            comparison_frame.loc[patch_mask, "v_real"] = patch_values.loc[patch_mask]
+            comparison_frame["slow_sw_patch_mask"] = patch_mask
         microforecast_index = pd.DatetimeIndex(df_sat.index) + pd.Timedelta(days=float(cr_days))
         df_microforecast = pd.DataFrame(
             {"v_1cr_ago": pd.to_numeric(df_sat["v"], errors="coerce").to_numpy()},
@@ -150,6 +175,44 @@ def _format_title(current_time):
     return f"Heliosphere at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
 
 
+def _compute_ch_age_days(phi_deg, speed_km_s, cr_days):
+    if not (np.isfinite(phi_deg) and np.isfinite(speed_km_s) and float(speed_km_s) > 0.0):
+        return np.nan
+    phi_fraction = np.mod(float(phi_deg), 360.0) / 360.0
+    rotation_days = phi_fraction * float(cr_days)
+    travel_days = AU_KM / float(speed_km_s) / SECONDS_PER_DAY
+    return rotation_days + travel_days
+
+
+def _resolve_age_inputs(frame, current_time):
+    if not {"phi_target", "v_predict"}.issubset(frame.columns):
+        return np.nan, np.nan
+    age_frame = frame[["phi_target", "v_predict"]].dropna().sort_index()
+    age_frame = age_frame[~age_frame.index.duplicated(keep="last")]
+    if age_frame.empty:
+        return np.nan, np.nan
+    nearest_pos = age_frame.index.get_indexer(
+        [pd.Timestamp(current_time)],
+        method="nearest",
+        tolerance=AGE_SAMPLE_TOLERANCE,
+    )[0]
+    if nearest_pos < 0:
+        return np.nan, np.nan
+    nearest_row = age_frame.iloc[int(nearest_pos)]
+    return float(nearest_row["phi_target"]), float(nearest_row["v_predict"])
+
+
+def _format_satellite_panel_title(label, window_before_days, window_after_days, age_days):
+    if np.isfinite(age_days):
+        age_text = f"age={age_days:.2f} d"
+    else:
+        age_text = "age=n/a"
+    return (
+        f"   {label} ({age_text}): "
+        f"t-{float(window_before_days):.0f}d to t+{float(window_after_days):.0f}d"
+    )
+
+
 def _resolve_panel_ylim(sat_items):
     y_parts = []
     for sat_item in sat_items:
@@ -189,7 +252,29 @@ def _update_satellite_markers(sat_items, current_time, r_axis):
         sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
 
 
-def _update_panel_windows(sat_items, slow_sw_series, current_time, window_before_days, window_after_days):
+def _update_panel_titles(sat_items, current_time, window_before_days, window_after_days):
+    current_time = pd.Timestamp(current_time)
+    for sat_item in sat_items:
+        sat_frame = sat_item["frame"]
+        phi_value, speed_value = _resolve_age_inputs(sat_frame, current_time)
+        age_days = _compute_ch_age_days(
+            phi_deg=phi_value,
+            speed_km_s=speed_value,
+            cr_days=window_before_days + window_after_days,
+        )
+        sat_item["axis"].set_title(
+            _format_satellite_panel_title(
+                sat_item["label"],
+                window_before_days=window_before_days,
+                window_after_days=window_after_days,
+                age_days=age_days,
+            ),
+            fontsize=10,
+            loc="left",
+        )
+
+
+def _update_panel_windows(sat_items, current_time, window_before_days, window_after_days):
     current_time = pd.Timestamp(current_time)
     window_start = current_time - pd.Timedelta(days=float(window_before_days))
     window_end = current_time + pd.Timedelta(days=float(window_after_days))
@@ -212,13 +297,11 @@ def _update_panel_windows(sat_items, slow_sw_series, current_time, window_before
                 _microforecast.index,
                 _microforecast.values,
             )
-        slow_sw_window = slow_sw_series.loc[window_start:window_end]
-        sat_item["slow_sw_line"].set_data(slow_sw_window.index, slow_sw_window.values)
         sat_item["time_marker"].set_xdata([current_time, current_time])
         sat_item["axis"].set_xlim(window_start, window_end)
 
 
-def _initialize_panels(sat_axes, sat_items, slow_sw_series, current_time, window_before_days, window_after_days, y_lim):
+def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, window_after_days, y_lim):
     for sat_idx, sat_item in enumerate(sat_items):
         sat_axis = sat_axes[sat_idx]
         sat_item["axis"] = sat_axis
@@ -226,7 +309,6 @@ def _initialize_panels(sat_axes, sat_items, slow_sw_series, current_time, window
         sat_item["real_line"] = None
         sat_item["swx_line"] = None
         sat_item["microforecast_line"] = None
-        sat_item["slow_sw_line"] = None
         sat_item["time_marker"] = sat_axis.axvline(
             current_time, color="black", linestyle="--", linewidth=1.0, alpha=0.7
         )
@@ -237,16 +319,8 @@ def _initialize_panels(sat_axes, sat_items, slow_sw_series, current_time, window
         if sat_item["swx_col"] is not None:
             (sat_item["swx_line"],) = sat_axis.plot([], [], color=SWX_LINE_COLOR, linewidth=1.35, alpha=0.95, linestyle="-", label="v_swx")
         if sat_item["microforecast_col"] is not None:
-            (sat_item["microforecast_line"],) = sat_axis.plot([], [], color=MICROFORECAST_LINE_COLOR, linewidth=1.25, alpha=0.95, linestyle="--", label="1CR microforecast")
-        (sat_item["slow_sw_line"],) = sat_axis.plot(
-            slow_sw_series.index, slow_sw_series.values,
-            color=SLOW_SW_LINE_COLOR, linestyle="-.", linewidth=1.0, alpha=0.75, label="v_min",
-        )
+            (sat_item["microforecast_line"],) = sat_axis.plot([], [], color=MICROFORECAST_LINE_COLOR, linewidth=1.25, alpha=0.95, linestyle="--", label="v_prev_cr")
         sat_axis.set_ylabel("v (km/s)")
-        sat_axis.set_title(
-            f"   {sat_item['label']}: t-{float(window_before_days):.0f}d to t+{float(window_after_days):.0f}d",
-            fontsize=10, loc="left",
-        )
         sat_axis.plot(
             [0.012], [1.035], transform=sat_axis.transAxes,
             linestyle="None", marker=sat_item["marker"],
@@ -264,9 +338,14 @@ def _initialize_panels(sat_axes, sat_items, slow_sw_series, current_time, window
         last_sat_axis = sat_axes[len(sat_items) - 1]
         last_sat_axis.xaxis.set_major_locator(mdates.AutoDateLocator())
         last_sat_axis.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
+        _update_panel_titles(
+            sat_items=sat_items,
+            current_time=current_time,
+            window_before_days=window_before_days,
+            window_after_days=window_after_days,
+        )
         _update_panel_windows(
             sat_items=sat_items,
-            slow_sw_series=slow_sw_series,
             current_time=current_time,
             window_before_days=window_before_days,
             window_after_days=window_after_days,
@@ -277,12 +356,12 @@ def _build_figure_axes(n_sat_panels, layout):
     """Create figure and (polar_ax, sat_axes) for a layout."""
     panel_height = 1.55
     if layout == "vertical":
-        fig_height = max(8.6, 6.4 + panel_height * n_sat_panels)
-        fig = plt.figure(figsize=(8.4, fig_height))
+        fig_height = max(10.0, 7.0 + 2.1 * n_sat_panels)
+        fig = plt.figure(figsize=(8.8, fig_height))
         grid_spec = fig.add_gridspec(
             n_sat_panels + 1, 1,
-            height_ratios=[4.2] + [1.0] * n_sat_panels,
-            hspace=0.5,
+            height_ratios=[4.2] + [1.35] * n_sat_panels,
+            hspace=0.46,
         )
         polar_ax = fig.add_subplot(grid_spec[0, 0], projection="polar")
         sat_axes = []
@@ -338,7 +417,6 @@ def _build_polar_view(
     visual element that should appear identically in both static plots
     and animations must be added here, never in the entry-point wrappers.
     """
-    slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
     sat_items = _build_satellite_plot_items(comparison_frames)
     init_time = time_axis[int(init_t_idx)]
 
@@ -397,7 +475,6 @@ def _build_polar_view(
     _initialize_panels(
         sat_axes=sat_axes,
         sat_items=sat_items,
-        slow_sw_series=slow_sw_series,
         current_time=init_time,
         window_before_days=window_before_days,
         window_after_days=window_after_days,
@@ -412,7 +489,6 @@ def _build_polar_view(
         "title": title,
         "artist": artist,
         "frame_buffer": frame_buffer,
-        "slow_sw_series": slow_sw_series,
         "time_axis": time_axis,
         "r_axis": r_axis,
         "grid_raw": grid_raw,
@@ -434,7 +510,12 @@ def _update_polar_view(state, t_idx):
     state["artist"].set_array(state["frame_buffer"].ravel())
     _update_panel_windows(
         sat_items=state["sat_items"],
-        slow_sw_series=state["slow_sw_series"],
+        current_time=t_cur,
+        window_before_days=state["window_before_days"],
+        window_after_days=state["window_after_days"],
+    )
+    _update_panel_titles(
+        sat_items=state["sat_items"],
         current_time=t_cur,
         window_before_days=state["window_before_days"],
         window_after_days=state["window_after_days"],
