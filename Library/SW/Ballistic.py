@@ -8,7 +8,6 @@ from tqdm.auto import tqdm
 
 from Library.SW.Coords import (
     build_grid_axes,
-    build_packet_geometry,
     build_transport_state,
 )
 
@@ -93,9 +92,8 @@ def deposit_run_cr(
     lo,
     hi,
     h_step_idx,
-    packet_off,
-    packet_p,
-    packet_alpha,
+    phi_delay_offsets,
+    phi_delay_alpha,
     n_t,
     n_p,
     n_r,
@@ -106,13 +104,12 @@ def deposit_run_cr(
 ):
     for kk in range(k_start, k_end):
         base_step = t_seed + h_step_idx[kk]
-        for q in range(packet_off.shape[0]):
-            tv = base_step + packet_off[q]
+        for pv in range(n_p):
+            tv = base_step + phi_delay_offsets[pv]
             if tv < 0 or tv >= n_t:
                 continue
 
-            pv = packet_p[q]
-            vv = v_left + packet_alpha[q] * dv
+            vv = v_left + phi_delay_alpha[pv] * dv
             flat_base = (tv * n_p + pv) * n_r
 
             for rr in range(lo, hi + 1):
@@ -133,9 +130,8 @@ def propagate_swept_cr_batch(
     seed_cr_b,
     seed_r_b,
     h_step_idx,
-    packet_off,
-    packet_p,
-    packet_alpha,
+    phi_delay_offsets,
+    phi_delay_alpha,
     n_t,
     n_p,
     n_r,
@@ -162,9 +158,8 @@ def propagate_swept_cr_batch(
                 r00,
                 r00,
                 h_step_idx,
-                packet_off,
-                packet_p,
-                packet_alpha,
+                phi_delay_offsets,
+                phi_delay_alpha,
                 n_t,
                 n_p,
                 n_r,
@@ -195,9 +190,8 @@ def propagate_swept_cr_batch(
                         run_lo,
                         run_hi,
                         h_step_idx,
-                        packet_off,
-                        packet_p,
-                        packet_alpha,
+                        phi_delay_offsets,
+                        phi_delay_alpha,
                         n_t,
                         n_p,
                         n_r,
@@ -219,9 +213,8 @@ def propagate_swept_cr_batch(
                         run_lo,
                         run_hi,
                         h_step_idx,
-                        packet_off,
-                        packet_p,
-                        packet_alpha,
+                        phi_delay_offsets,
+                        phi_delay_alpha,
                         n_t,
                         n_p,
                         n_r,
@@ -254,9 +247,8 @@ def propagate_swept_cr_batch(
                     run_lo,
                     run_hi,
                     h_step_idx,
-                    packet_off,
-                    packet_p,
-                    packet_alpha,
+                    phi_delay_offsets,
+                    phi_delay_alpha,
                     n_t,
                     n_p,
                     n_r,
@@ -278,9 +270,8 @@ def propagate_swept_cr_batch(
                 run_lo,
                 run_hi,
                 h_step_idx,
-                packet_off,
-                packet_p,
-                packet_alpha,
+                phi_delay_offsets,
+                phi_delay_alpha,
                 n_t,
                 n_p,
                 n_r,
@@ -299,9 +290,8 @@ def run_bulk_propagation(
     seed_cr_idx_arr,
     seed_r_idx,
     h_step_idx,
-    packet_off,
-    packet_p,
-    packet_alpha,
+    phi_delay_offsets,
+    phi_delay_alpha,
     n_t,
     n_p,
     n_r,
@@ -328,9 +318,8 @@ def run_bulk_propagation(
             seed_cr_idx_arr[b0:b1],
             seed_r_idx[b0:b1],
             h_step_idx,
-            packet_off,
-            packet_p,
-            packet_alpha,
+            phi_delay_offsets,
+            phi_delay_alpha,
             n_t,
             n_p,
             n_r,
@@ -401,7 +390,6 @@ def propagate_phi_targets(
     memory_guard_enabled,
     horizon_hours,
     time_step_hours,
-    field_half_width_h,
     r_solar_km,
     max_seed_batch,
     phi_targets,
@@ -429,12 +417,7 @@ def propagate_phi_targets(
         rotation_state=rotation_state,
         horizon_hours=horizon_hours,
         time_step_hours=time_step_hours,
-        field_half_width_h=field_half_width_h,
         r_solar_km=r_solar_km,
-    )
-    packet_p, packet_off, packet_alpha = build_packet_geometry(
-        phi_delay_steps=transport.phi_delay_steps,
-        field_half_width_steps=transport.field_half_width_steps,
     )
     accumulators = init_accumulators(
         n_t=len(grid.time_axis),
@@ -466,9 +449,8 @@ def propagate_phi_targets(
         seed_cr_idx_arr=seed_cr_idx_arr,
         seed_r_idx=seed_r_idx,
         h_step_idx=transport.h_step_idx,
-        packet_off=packet_off,
-        packet_p=packet_p,
-        packet_alpha=packet_alpha,
+        phi_delay_offsets=transport.phi_delay_offsets,
+        phi_delay_alpha=transport.phi_delay_alpha,
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),

@@ -24,7 +24,6 @@ from Library.SW.Config import (  # noqa: E402
 )
 from Library.SW.Coords import (  # noqa: E402
     build_grid_axes,
-    build_packet_geometry,
     build_transport_state,
     compute_rotation_state,
 )
@@ -166,7 +165,6 @@ def main(argv):
         rotation_state=rotation,
         horizon_hours=ballistic["horizon_hours"],
         time_step_hours=time_step_hours,
-        field_half_width_h=ballistic["field_half_width_h"],
         r_solar_km=ballistic["r_solar_km"],
     )
 
@@ -177,10 +175,6 @@ def main(argv):
             & (prepared["df_v"].index <= grid.time_axis.max())
         ]
         .copy()
-    )
-    packet_p, packet_off, packet_alpha = build_packet_geometry(
-        phi_delay_steps=transport.phi_delay_steps,
-        field_half_width_steps=transport.field_half_width_steps,
     )
     accumulators = init_accumulators(
         n_t=len(grid.time_axis),
@@ -212,9 +206,8 @@ def main(argv):
         seed_cr_idx_arr=seed_cr_idx_arr,
         seed_r_idx=seed_r_idx,
         h_step_idx=transport.h_step_idx,
-        packet_off=packet_off,
-        packet_p=packet_p,
-        packet_alpha=packet_alpha,
+        phi_delay_offsets=transport.phi_delay_offsets,
+        phi_delay_alpha=transport.phi_delay_alpha,
         n_t=len(grid.time_axis),
         n_p=len(grid.phi_axis),
         n_r=len(grid.r_axis),

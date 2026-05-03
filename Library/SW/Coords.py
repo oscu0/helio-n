@@ -34,7 +34,8 @@ class TransportState:
     r_kernel_scale: np.ndarray
     cr_steps: int
     phi_delay_steps: np.ndarray
-    field_half_width_steps: float
+    phi_delay_offsets: np.ndarray
+    phi_delay_alpha: np.ndarray
 
 
 def compute_rotation_state(cr_days, phi_step_minutes):
@@ -89,7 +90,6 @@ def build_transport_state(
     rotation_state,
     horizon_hours,
     time_step_hours,
-    field_half_width_h,
     r_solar_km,
 ):
     t0_ref = time_axis[0]
@@ -100,7 +100,12 @@ def build_transport_state(
     r_kernel_scale = (h_step_hours * 3600.0) / float(r_solar_km)
     cr_steps = int(round((rotation_state.cr_time / 3600.0) / float(time_step_hours)))
     phi_delay_steps = phi_delay_h / float(time_step_hours)
-    field_half_width_steps = float(field_half_width_h) / float(time_step_hours)
+    phi_delay_offsets = np.floor(phi_delay_steps).astype(np.int32)
+    phi_delay_alpha = np.clip(
+        phi_delay_steps - phi_delay_offsets.astype(np.float64),
+        0.0,
+        1.0,
+    ).astype(np.float32)
     return TransportState(
         t0_ref=t0_ref,
         horizon_steps=horizon_steps,
@@ -108,42 +113,6 @@ def build_transport_state(
         r_kernel_scale=r_kernel_scale,
         cr_steps=cr_steps,
         phi_delay_steps=phi_delay_steps,
-        field_half_width_steps=field_half_width_steps,
-    )
-
-
-def build_packet_geometry(phi_delay_steps, field_half_width_steps):
-    half_width_steps = float(field_half_width_steps)
-    if half_width_steps <= 0.0:
-        packet_p = np.arange(len(phi_delay_steps), dtype=np.int32)
-        packet_off = np.floor(phi_delay_steps).astype(np.int32)
-        packet_alpha = np.clip(
-            np.asarray(phi_delay_steps, dtype=np.float64) - packet_off.astype(np.float64),
-            0.0,
-            1.0,
-        ).astype(np.float32)
-        return packet_p, packet_off, packet_alpha
-
-    packet_width_steps = 2.0 * half_width_steps
-    packet_p_list = []
-    packet_off_list = []
-    packet_alpha_list = []
-
-    for phi_idx, center in enumerate(phi_delay_steps):
-        left = float(center) - half_width_steps
-        right = float(center) + half_width_steps
-        j_lo = int(np.floor(left))
-        j_hi = int(np.floor(right))
-        for offset in range(j_lo, j_hi + 1):
-            sample_center = float(offset) + 0.5
-            alpha = (sample_center - left) / packet_width_steps
-            alpha = float(np.clip(alpha, 0.0, 1.0))
-            packet_p_list.append(phi_idx)
-            packet_off_list.append(offset)
-            packet_alpha_list.append(alpha)
-
-    return (
-        np.asarray(packet_p_list, dtype=np.int32),
-        np.asarray(packet_off_list, dtype=np.int32),
-        np.asarray(packet_alpha_list, dtype=np.float32),
+        phi_delay_offsets=phi_delay_offsets,
+        phi_delay_alpha=phi_delay_alpha,
     )
