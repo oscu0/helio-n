@@ -8,7 +8,7 @@
     "r_solar_km": 700000.0,
     "r_max": 215,
     "horizon_hours": 168.0,
-    "field_half_width_h": 0.5,
+    "field_half_width_h": 0,
     "memory_guard_enabled": true,
     "simulation_pad_days": 7.0,
     "earth_phi_target": 0.0,
