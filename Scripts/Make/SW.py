@@ -265,6 +265,7 @@ def main(argv):
             df_swx=satellite_swx_frames.get(sat_name),
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
+            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
             cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
         )
