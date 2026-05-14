@@ -14,7 +14,7 @@
         "plot_threads": 8,
         "chunk_size": 8,
         "sw": {
-            "dense_memory_budget_gb": 10.0,
+            "dense_memory_budget_gb": 12.0,
             "max_seed_batch": 256,
             "post_chunk_t": 128,
             "animation_dpi": 100
@@ -35,7 +35,7 @@
         "plot_threads": 56,
         "chunk_size": 16,
         "sw": {
-            "dense_memory_budget_gb": 64.0,
+            "dense_memory_budget_gb": 192.0,
             "max_seed_batch": 2048,
             "post_chunk_t": 512,
             "animation_dpi": 128

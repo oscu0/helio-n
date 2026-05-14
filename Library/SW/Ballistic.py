@@ -54,6 +54,7 @@ def prepare_seed_inputs(
     time_step_hours,
     r_kernel_scale,
     r0,
+    r_axis,
 ):
     seed_vals = df_v_run["v"].to_numpy(dtype=np.float32)
 
@@ -69,9 +70,27 @@ def prepare_seed_inputs(
     seed_t_idx = np.asarray(delta_hours, dtype=np.int64).astype(np.int32)
     seed_cr_idx_arr = (seed_t_idx // int(cr_steps)).astype(np.int32)
 
-    seed_r_idx = np.rint(
-        seed_vals[:, None].astype(np.float64) * r_kernel_scale[None, :]
-    ).astype(np.int16)
+    seed_r_values = (
+        float(r0) + seed_vals[:, None].astype(np.float64) * r_kernel_scale[None, :]
+    )
+    r_axis_values = np.asarray(r_axis, dtype=np.float64)
+    r_idx_hi = np.searchsorted(r_axis_values, seed_r_values, side="left")
+    seed_r_idx = np.empty_like(r_idx_hi, dtype=np.int32)
+
+    below_grid = seed_r_values < r_axis_values[0]
+    above_grid = r_idx_hi >= len(r_axis_values)
+    inside_grid = ~(below_grid | above_grid)
+
+    r_idx_hi_inside = r_idx_hi[inside_grid]
+    r_idx_lo = np.clip(r_idx_hi_inside - 1, 0, len(r_axis_values) - 1)
+    use_lo = (
+        np.abs(seed_r_values[inside_grid] - r_axis_values[r_idx_lo])
+        <= np.abs(r_axis_values[r_idx_hi_inside] - seed_r_values[inside_grid])
+    )
+    seed_r_idx[inside_grid] = np.where(use_lo, r_idx_lo, r_idx_hi_inside)
+    seed_r_idx[below_grid] = -1
+    seed_r_idx[above_grid] = len(r_axis_values)
+    seed_r_idx = seed_r_idx.astype(np.int16)
 
     return (
         seed_vals,
@@ -386,11 +405,11 @@ def propagate_phi_targets(
     rotation_state,
     r0,
     r_max,
+    r_step,
     dense_memory_budget_gb,
     memory_guard_enabled,
     horizon_hours,
     time_step_hours,
-    r_solar_km,
     max_seed_batch,
     phi_targets,
     show_progress=True,
@@ -407,6 +426,7 @@ def propagate_phi_targets(
         phi_step=rotation_state.phi_step,
         r0=r0,
         r_max=r_max,
+        r_step=r_step,
         dense_memory_budget_gb=dense_memory_budget_gb,
         memory_guard_enabled=memory_guard_enabled,
         phi_values=phi_targets,
@@ -417,7 +437,6 @@ def propagate_phi_targets(
         rotation_state=rotation_state,
         horizon_hours=horizon_hours,
         time_step_hours=time_step_hours,
-        r_solar_km=r_solar_km,
     )
     accumulators = init_accumulators(
         n_t=len(grid.time_axis),
@@ -440,6 +459,7 @@ def propagate_phi_targets(
         time_step_hours=time_step_hours,
         r_kernel_scale=transport.r_kernel_scale,
         r0=r0,
+        r_axis=grid.r_axis,
     )
     stats = run_bulk_propagation(
         seed_vals=seed_vals,

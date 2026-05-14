@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS, SOLAR_RADIUS_KM
+
 
 @dataclass(frozen=True)
 class RotationState:
@@ -38,7 +40,7 @@ class TransportState:
     phi_delay_alpha: np.ndarray
 
 
-def compute_rotation_state(cr_days, phi_step_minutes):
+def compute_rotation_state(phi_step_minutes, cr_days=CARRINGTON_ROTATION_DAYS):
     cr_time = float(cr_days) * 24.0 * 3600.0
     omega = 360.0 / cr_time
     phi_step = (float(phi_step_minutes) / 60.0) * 3600.0 * omega
@@ -49,6 +51,22 @@ def compute_rotation_state(cr_days, phi_step_minutes):
     )
 
 
+def build_r_axis(r0, r_max, r_step, required_r_values=(215.0,)):
+    r0 = float(r0)
+    r_max = float(r_max)
+    r_step = float(r_step)
+    assert r_step > 0.0, "r_step must be positive"
+    assert r_max >= r0, "r_max must be >= r0"
+
+    r_axis = np.arange(r0, r_max + (0.5 * r_step), r_step, dtype=np.float64)
+    r_axis = r_axis[r_axis <= r_max]
+    required = [float(value) for value in required_r_values]
+    for value in required:
+        assert r0 <= value <= r_max, f"required r shell {value:g} must be within [r0, r_max]"
+    r_axis = np.concatenate([r_axis, np.asarray([r_max, *required], dtype=np.float64)])
+    return np.unique(np.round(r_axis, decimals=8)).astype(np.float32)
+
+
 def build_grid_axes(
     sim_start,
     sim_end,
@@ -56,6 +74,7 @@ def build_grid_axes(
     phi_step,
     r0,
     r_max,
+    r_step,
     dense_memory_budget_gb,
     memory_guard_enabled,
     phi_values=None,
@@ -66,7 +85,7 @@ def build_grid_axes(
     else:
         phi_axis = np.mod(np.asarray(phi_values, dtype=float).reshape(-1), 360.0)
         assert phi_axis.size > 0, "phi_values must contain at least one target phi"
-    r_axis = np.arange(int(r0), int(r_max) + 1, 1, dtype=np.int16)
+    r_axis = build_r_axis(r0=r0, r_max=r_max, r_step=r_step)
     n_cells = int(len(time_axis) * len(phi_axis) * len(r_axis))
     est_runtime_gb = (n_cells * 4 * 1.6) / 1e9
     if memory_guard_enabled:
@@ -90,7 +109,7 @@ def build_transport_state(
     rotation_state,
     horizon_hours,
     time_step_hours,
-    r_solar_km,
+    r_solar_km=SOLAR_RADIUS_KM,
 ):
     t0_ref = time_axis[0]
     phi_delay_h = (phi_axis / rotation_state.omega) / 3600.0

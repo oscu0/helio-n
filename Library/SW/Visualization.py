@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
+
 PREDICT_COLUMN = "v_predict"
 REAL_COLUMN = "v_real"
 SWX_COLUMN = "v_swx"
@@ -48,7 +50,7 @@ def build_satellite_comparison_frame(
     df_swx=None,
     phi_target=0.0,
     r_target=215.0,
-    cr_days=27.0,
+    cr_days=CARRINGTON_ROTATION_DAYS,
     draw_slow_sw=True,
     slow_sw_speed=None,
     slow_sw_patch=True,
@@ -534,7 +536,7 @@ def plot_polar_snapshot(
     slow_sw_speed,
     comparison_frames,
     draw_slow_sw=True,
-    cr_days=27.0,
+    cr_days=CARRINGTON_ROTATION_DAYS,
 ):
     current_time = pd.Timestamp(date_str)
     t_idx = int(pd.DatetimeIndex(time_axis).get_loc(current_time))
@@ -566,9 +568,9 @@ def export_polar_animation(
     slow_sw_pred_mask,
     time_step_minutes,
     slow_sw_speed,
-    cr_days,
     comparison_frames,
     draw_slow_sw=True,
+    cr_days=CARRINGTON_ROTATION_DAYS,
     anim_fps=30,
     anim_1h_mult=1.0,
     anim_dpi=100,

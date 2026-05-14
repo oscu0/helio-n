@@ -82,16 +82,11 @@ def load_sw_input_from_sql(
     with conn:
         with conn.cursor() as cur:
             for chunk_start, chunk_end in iter_year_windows(start_dt, end_dt):
-                chunk_query = query
-                if chunk_query is None:
-                    chunk_query = DEFAULT_SQL_QUERY.replace(
-                        "SDO_PREFIX",
-                        (
-                            "sdo"
-                            if chunk_start < pd.Timestamp(SDO_V2_HANDOFF)
-                            else "sdo_v2"
-                        ),
-                    )
+                sdo_prefix = (
+                    "sdo" if chunk_start < pd.Timestamp(SDO_V2_HANDOFF) else "sdo_v2"
+                )
+                chunk_query = query if query is not None else DEFAULT_SQL_QUERY
+                chunk_query = chunk_query.replace("SDO_PREFIX", sdo_prefix)
                 cur.execute(
                     chunk_query,
                     {"start_dt": chunk_start, "end_dt": chunk_end},

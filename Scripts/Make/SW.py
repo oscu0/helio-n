@@ -146,7 +146,6 @@ def main(argv):
     )
 
     rotation = compute_rotation_state(
-        cr_days=ballistic["cr_days"],
         phi_step_minutes=ballistic["phi_step_minutes"],
     )
     grid = build_grid_axes(
@@ -156,6 +155,7 @@ def main(argv):
         phi_step=rotation.phi_step,
         r0=ballistic["r0"],
         r_max=ballistic["r_max"],
+        r_step=ballistic["r_step"],
         dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
         memory_guard_enabled=ballistic["memory_guard_enabled"],
     )
@@ -165,7 +165,6 @@ def main(argv):
         rotation_state=rotation,
         horizon_hours=ballistic["horizon_hours"],
         time_step_hours=time_step_hours,
-        r_solar_km=ballistic["r_solar_km"],
     )
 
     df_v_run = (
@@ -197,6 +196,7 @@ def main(argv):
         time_step_hours=time_step_hours,
         r_kernel_scale=transport.r_kernel_scale,
         r0=ballistic["r0"],
+        r_axis=grid.r_axis,
     )
     stats = run_bulk_propagation(
         seed_vals=seed_vals,
@@ -259,7 +259,6 @@ def main(argv):
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
             slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
-            cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
         )
     primary_sat = plot_sats[0]["sat"]
@@ -278,7 +277,6 @@ def main(argv):
             comparison_frames=comparison_frames,
             time_step_minutes=time_step_minutes,
             slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
-            cr_days=ballistic["cr_days"],
             draw_slow_sw=True,
             anim_fps=args.animation_fps,
             anim_dpi=(
