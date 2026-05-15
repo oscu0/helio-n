@@ -129,10 +129,20 @@ def build_satellite_comparison_frame(
             {"v_1cr_ago": pd.to_numeric(df_sat["v"], errors="coerce").to_numpy()},
             index=microforecast_index,
         ).sort_index()
-        comparison_frame = comparison_frame.join(df_microforecast, how="outer")
-        comparison_frame["v_1cr_ago"] = comparison_frame["v_1cr_ago"].interpolate(
-            method="time"
-        )
+        # cr_days is not a multiple of time_freq, so an outer join on the full
+        # microforecast index would interleave off-grid rows with the time_axis
+        # grid and leave v_predict NaN at every other row. Extend the index
+        # only with the tail past the current end (to keep future v_1cr_ago
+        # values visible in the panel window), then interpolate v_1cr_ago onto
+        # the existing grid using the raw microforecast as the source.
+        existing_max = comparison_frame.index.max()
+        microforecast_tail = df_microforecast.loc[df_microforecast.index > existing_max]
+        if len(microforecast_tail) > 0:
+            comparison_frame = comparison_frame.join(microforecast_tail, how="outer")
+        v_1cr_source = df_microforecast["v_1cr_ago"]
+        combined_index = comparison_frame.index.union(v_1cr_source.index)
+        v_1cr_interp = v_1cr_source.reindex(combined_index).interpolate(method="time")
+        comparison_frame["v_1cr_ago"] = v_1cr_interp.reindex(comparison_frame.index)
     if df_sat is not None and "lat_hgs" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
     if df_sat is not None and "lat_hge" in df_sat.columns:
