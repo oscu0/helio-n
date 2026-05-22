@@ -224,12 +224,31 @@ def main(argv):
         stats.filled,
         "/",
         stats.total,
+        "| deposits:",
+        stats.deposits,
+        "| swept-skip deposits:",
+        stats.swept_skip_deposits,
+        "| avg deposits/seed:",
+        f"{stats.avg_deposits_per_seed:.1f}",
+        "| avg swept-skip deposits/seed:",
+        f"{stats.avg_swept_skip_deposits_per_seed:.1f}",
+        "| avg deposits/filled cell:",
+        f"{stats.avg_deposits_per_filled_cell:.2f}",
     )
 
     post = postprocess_max_field(
         V_accum_max=accumulators.V_accum_max,
         slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
         post_chunk_t=runtime["post_chunk_t"],
+    )
+    print(
+        "Post-max cells:",
+        "slow:",
+        post.slow_cells,
+        "| non-slow:",
+        post.non_slow_cells,
+        "| non-slow / filled:",
+        f"{100.0 * post.non_slow_fraction_filled:.2f}%",
     )
     plot_sats = [
         {

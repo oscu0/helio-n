@@ -13,11 +13,13 @@ PREDICT_COLUMN = "v_predict"
 REAL_COLUMN = "v_real"
 SWX_COLUMN = "v_swx"
 MICROFORECAST_COLUMN = "v_1cr_ago"
+NOAA_COLUMN = "v_noaa"
 SAT_MARKER_SHAPES = ("o", "s", "^", "D", "P", "X", "v", "<", ">", "h", "*")
 PREDICT_LINE_COLOR = "tab:red"
 REAL_LINE_COLOR = "tab:green"
 SWX_LINE_COLOR = "tab:orange"
 MICROFORECAST_LINE_COLOR = "tab:blue"
+NOAA_LINE_COLOR = "tab:purple"
 AU_KM = 149597870.7
 SECONDS_PER_DAY = 86400.0
 AGE_SAMPLE_TOLERANCE = pd.Timedelta(hours=12)
@@ -48,6 +50,7 @@ def build_satellite_comparison_frame(
     slow_sw_pred_mask,
     df_sat=None,
     df_swx=None,
+    df_noaa=None,
     phi_target=0.0,
     r_target=215.0,
     cr_days=CARRINGTON_ROTATION_DAYS,
@@ -150,6 +153,9 @@ def build_satellite_comparison_frame(
     if df_swx is not None and "v_swx" in df_swx.columns:
         comparison_frame = comparison_frame.join(df_swx[["v_swx"]], how="outer")
         comparison_frame["v_swx"] = comparison_frame["v_swx"].interpolate(method="time")
+    if df_noaa is not None and "v_noaa" in df_noaa.columns:
+        comparison_frame = comparison_frame.join(df_noaa[["v_noaa"]], how="outer")
+        comparison_frame["v_noaa"] = comparison_frame["v_noaa"].interpolate(method="time")
 
     if df_sat is not None:
         comparison_frame.attrs.update(df_sat.attrs)
@@ -170,6 +176,7 @@ def _build_satellite_plot_items(comparison_frames):
                 "real_col": REAL_COLUMN if REAL_COLUMN in frame.columns else None,
                 "swx_col": SWX_COLUMN if SWX_COLUMN in frame.columns else None,
                 "microforecast_col": MICROFORECAST_COLUMN if MICROFORECAST_COLUMN in frame.columns else None,
+                "noaa_col": NOAA_COLUMN if NOAA_COLUMN in frame.columns else None,
                 "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
             }
         )
@@ -233,6 +240,7 @@ def _resolve_panel_ylim(sat_items):
             sat_item["real_col"],
             sat_item["swx_col"],
             sat_item["microforecast_col"],
+            sat_item["noaa_col"],
         ):
             if column is None:
                 continue
@@ -309,6 +317,9 @@ def _update_panel_windows(sat_items, current_time, window_before_days, window_af
                 _microforecast.index,
                 _microforecast.values,
             )
+        if sat_item["noaa_line"] is not None:
+            _noaa = compare_window[sat_item["noaa_col"]].dropna()
+            sat_item["noaa_line"].set_data(_noaa.index, _noaa.values)
         sat_item["time_marker"].set_xdata([current_time, current_time])
         sat_item["axis"].set_xlim(window_start, window_end)
 
@@ -321,6 +332,7 @@ def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, wi
         sat_item["real_line"] = None
         sat_item["swx_line"] = None
         sat_item["microforecast_line"] = None
+        sat_item["noaa_line"] = None
         sat_item["time_marker"] = sat_axis.axvline(
             current_time, color="black", linestyle="--", linewidth=1.0, alpha=0.7
         )
@@ -332,6 +344,8 @@ def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, wi
             (sat_item["swx_line"],) = sat_axis.plot([], [], color=SWX_LINE_COLOR, linewidth=1.35, alpha=0.95, linestyle="-", label="v_swx")
         if sat_item["microforecast_col"] is not None:
             (sat_item["microforecast_line"],) = sat_axis.plot([], [], color=MICROFORECAST_LINE_COLOR, linewidth=1.25, alpha=0.95, linestyle="--", label="v_prev_cr")
+        if sat_item["noaa_col"] is not None:
+            (sat_item["noaa_line"],) = sat_axis.plot([], [], color=NOAA_LINE_COLOR, linewidth=1.35, alpha=0.95, linestyle="-", label="v_noaa")
         sat_axis.set_ylabel("v (km/s)")
         sat_axis.plot(
             [0.012], [1.035], transform=sat_axis.transAxes,

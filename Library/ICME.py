@@ -5,6 +5,7 @@ import pandas as pd
 from Library.Paths import data_path, resolve_repo_path
 
 DEFAULT_ICME_CSV_PATH = data_path("merged_icme_short.csv")
+DEFAULT_POST_ICME_BODY_END_TOLERANCE = pd.Timedelta(hours=12)
 
 
 def load_icme_windows(icme_csv_path=DEFAULT_ICME_CSV_PATH):
@@ -26,10 +27,19 @@ def load_icme_windows(icme_csv_path=DEFAULT_ICME_CSV_PATH):
     return icme_df.sort_values("start").reset_index(drop=True)
 
 
-def build_icme_mask(times, icme_windows=None, icme_csv_path=DEFAULT_ICME_CSV_PATH):
-    """Return a boolean mask marking timestamps that fall inside any ICME interval."""
+def build_icme_mask(
+    times,
+    icme_windows=None,
+    icme_csv_path=DEFAULT_ICME_CSV_PATH,
+    post_body_end_tolerance=DEFAULT_POST_ICME_BODY_END_TOLERANCE,
+):
+    """Return a boolean mask marking timestamps inside ICME intervals plus end tolerance."""
     timestamps = pd.to_datetime(pd.Index(times))
     mask = pd.Series(False, index=timestamps)
+    if post_body_end_tolerance is None:
+        post_body_end_tolerance = pd.Timedelta(0)
+    else:
+        post_body_end_tolerance = pd.Timedelta(post_body_end_tolerance)
 
     windows = (
         load_icme_windows(icme_csv_path=icme_csv_path)
@@ -45,6 +55,9 @@ def build_icme_mask(times, icme_windows=None, icme_csv_path=DEFAULT_ICME_CSV_PAT
         windows["end"] = pd.to_datetime(windows.get("T_end"), errors="coerce")
         windows = windows.dropna(subset=["start", "end"]).copy()
 
+    windows["start"] = pd.to_datetime(windows["start"])
+    windows["end"] = pd.to_datetime(windows["end"]) + post_body_end_tolerance
+
     for row in windows.itertuples(index=False):
         mask |= (timestamps >= row.start) & (timestamps <= row.end)
 
@@ -56,20 +69,27 @@ def drop_icme_periods(
     datetime_col=None,
     icme_windows=None,
     icme_csv_path=DEFAULT_ICME_CSV_PATH,
+    post_body_end_tolerance=DEFAULT_POST_ICME_BODY_END_TOLERANCE,
 ):
-    """Drop dataframe rows whose timestamps overlap an ICME interval."""
+    """Drop rows whose timestamps overlap an ICME interval plus end tolerance."""
     df_out = df.copy()
 
     if datetime_col is None:
         # Default to treating the dataframe index itself as the event timeline.
         timestamps = pd.to_datetime(df_out.index)
         mask = build_icme_mask(
-            timestamps, icme_windows=icme_windows, icme_csv_path=icme_csv_path
+            timestamps,
+            icme_windows=icme_windows,
+            icme_csv_path=icme_csv_path,
+            post_body_end_tolerance=post_body_end_tolerance,
         )
         return df_out.loc[~mask.to_numpy()].copy()
 
     df_out[datetime_col] = pd.to_datetime(df_out[datetime_col])
     mask = build_icme_mask(
-        df_out[datetime_col], icme_windows=icme_windows, icme_csv_path=icme_csv_path
+        df_out[datetime_col],
+        icme_windows=icme_windows,
+        icme_csv_path=icme_csv_path,
+        post_body_end_tolerance=post_body_end_tolerance,
     )
     return df_out.loc[~mask.to_numpy()].copy()

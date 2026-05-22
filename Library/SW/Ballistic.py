@@ -28,6 +28,11 @@ class PropagationStats:
     total: int
     prop_seconds: float
     seeds_processed: int
+    deposits: int
+    swept_skip_deposits: int
+    avg_deposits_per_seed: float
+    avg_deposits_per_filled_cell: float
+    avg_swept_skip_deposits_per_seed: float
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,10 @@ class PostProcessingState:
     V_grid: np.ndarray
     max_slow_sw_pred_mask: np.ndarray
     max_vlims_raw: tuple[float, float]
+    filled_cells: int
+    slow_cells: int
+    non_slow_cells: int
+    non_slow_fraction_filled: float
 
 
 def init_accumulators(n_t, n_p, n_r):
@@ -121,6 +130,11 @@ def deposit_run_cr(
     max_flat,
     cr_flat,
 ):
+    deposits = 0
+    swept_skip_deposits = 0
+    skipped_cells_per_sweep = hi - lo - 1
+    if skipped_cells_per_sweep < 0:
+        skipped_cells_per_sweep = 0
     for kk in range(k_start, k_end):
         base_step = t_seed + h_step_idx[kk]
         for pv in range(n_p):
@@ -130,14 +144,17 @@ def deposit_run_cr(
 
             vv = v_left + phi_delay_alpha[pv] * dv
             flat_base = (tv * n_p + pv) * n_r
+            swept_skip_deposits += skipped_cells_per_sweep
 
             for rr in range(lo, hi + 1):
                 idx = flat_base + rr
+                deposits += 1
                 if cr_flat[idx] != seed_cr_idx:
                     cr_flat[idx] = seed_cr_idx
                     max_flat[idx] = vv
                 elif vv > max_flat[idx]:
                     max_flat[idx] = vv
+    return deposits, swept_skip_deposits
 
 
 @nb.njit(cache=True)
@@ -159,6 +176,8 @@ def propagate_swept_cr_batch(
 ):
     n_seed = seed_vals_b.shape[0]
     h_len = seed_r_b.shape[1]
+    deposits = 0
+    swept_skip_deposits = 0
 
     for i in range(n_seed):
         v_left = 0.5 * (v_prev_b[i] + seed_vals_b[i])
@@ -169,7 +188,7 @@ def propagate_swept_cr_batch(
 
         r00 = int(seed_r_b[i, 0])
         if 0 <= r00 < n_r:
-            deposit_run_cr(
+            deposit_count, swept_skip_count = deposit_run_cr(
                 t_seed,
                 seed_cr_idx,
                 0,
@@ -187,6 +206,8 @@ def propagate_swept_cr_batch(
                 max_flat,
                 cr_flat,
             )
+            deposits += deposit_count
+            swept_skip_deposits += swept_skip_count
 
         run_active = False
         run_lo = 0
@@ -201,7 +222,7 @@ def propagate_swept_cr_batch(
 
             if lo > (n_r - 1):
                 if run_active:
-                    deposit_run_cr(
+                    deposit_count, swept_skip_count = deposit_run_cr(
                         t_seed,
                         seed_cr_idx,
                         run_start,
@@ -219,12 +240,14 @@ def propagate_swept_cr_batch(
                         max_flat,
                         cr_flat,
                     )
+                    deposits += deposit_count
+                    swept_skip_deposits += swept_skip_count
                     run_active = False
                 break
 
             if hi < 0:
                 if run_active:
-                    deposit_run_cr(
+                    deposit_count, swept_skip_count = deposit_run_cr(
                         t_seed,
                         seed_cr_idx,
                         run_start,
@@ -242,6 +265,8 @@ def propagate_swept_cr_batch(
                         max_flat,
                         cr_flat,
                     )
+                    deposits += deposit_count
+                    swept_skip_deposits += swept_skip_count
                     run_active = False
                 continue
 
@@ -258,7 +283,7 @@ def propagate_swept_cr_batch(
             elif lo == run_lo and hi == run_hi:
                 continue
             else:
-                deposit_run_cr(
+                deposit_count, swept_skip_count = deposit_run_cr(
                     t_seed,
                     seed_cr_idx,
                     run_start,
@@ -276,12 +301,14 @@ def propagate_swept_cr_batch(
                     max_flat,
                     cr_flat,
                 )
+                deposits += deposit_count
+                swept_skip_deposits += swept_skip_count
                 run_lo = lo
                 run_hi = hi
                 run_start = k
 
         if run_active:
-            deposit_run_cr(
+            deposit_count, swept_skip_count = deposit_run_cr(
                 t_seed,
                 seed_cr_idx,
                 run_start,
@@ -299,6 +326,10 @@ def propagate_swept_cr_batch(
                 max_flat,
                 cr_flat,
             )
+            deposits += deposit_count
+            swept_skip_deposits += swept_skip_count
+
+    return deposits, swept_skip_deposits
 
 
 def run_bulk_propagation(
@@ -327,9 +358,11 @@ def run_bulk_propagation(
     if show_progress:
         iterator = tqdm(iterator, total=n_batches, desc="2D propagate", unit="batch")
 
+    deposits = 0
+    swept_skip_deposits = 0
     for b0 in iterator:
         b1 = min(b0 + int(max_seed_batch), n_seed)
-        propagate_swept_cr_batch(
+        deposit_count, swept_skip_count = propagate_swept_cr_batch(
             v_prev[b0:b1],
             seed_vals[b0:b1],
             v_next[b0:b1],
@@ -345,15 +378,27 @@ def run_bulk_propagation(
             max_flat,
             cr_flat,
         )
+        deposits += deposit_count
+        swept_skip_deposits += swept_skip_count
 
     prop_seconds = time.perf_counter() - prop_start
     filled = int(np.count_nonzero(~np.isnan(max_flat)))
     total = int(max_flat.size)
+    avg_deposits_per_seed = float(deposits / n_seed) if n_seed else 0.0
+    avg_deposits_per_filled_cell = float(deposits / filled) if filled else 0.0
+    avg_swept_skip_deposits_per_seed = (
+        float(swept_skip_deposits / n_seed) if n_seed else 0.0
+    )
     return PropagationStats(
         filled=filled,
         total=total,
         prop_seconds=prop_seconds,
         seeds_processed=n_seed,
+        deposits=int(deposits),
+        swept_skip_deposits=int(swept_skip_deposits),
+        avg_deposits_per_seed=avg_deposits_per_seed,
+        avg_deposits_per_filled_cell=avg_deposits_per_filled_cell,
+        avg_swept_skip_deposits_per_seed=avg_swept_skip_deposits_per_seed,
     )
 
 
@@ -390,10 +435,21 @@ def postprocess_max_field(
     else:
         vlims = (float("nan"), float("nan"))
 
+    filled_cells = int(np.count_nonzero(~np.isnan(V_grid_max_raw)))
+    slow_cells = int(np.count_nonzero(slow_sw_pred_max))
+    non_slow_cells = int(filled_cells - slow_cells)
+    non_slow_fraction_filled = (
+        float(non_slow_cells / filled_cells) if filled_cells else 0.0
+    )
+
     return PostProcessingState(
         V_grid=V_grid_max_raw,
         max_slow_sw_pred_mask=slow_sw_pred_max,
         max_vlims_raw=vlims,
+        filled_cells=filled_cells,
+        slow_cells=slow_cells,
+        non_slow_cells=non_slow_cells,
+        non_slow_fraction_filled=non_slow_fraction_filled,
     )
 
 
