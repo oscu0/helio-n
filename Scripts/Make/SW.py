@@ -20,6 +20,7 @@ from Library.Paths import data_path, resolve_repo_path  # noqa: E402
 from Library.SW.Config import (  # noqa: E402
     load_ballistic_spec,
     load_empirical_spec,
+    load_slow_sw_patch_spec,
     load_sw_runtime_spec,
 )
 from Library.SW.Coords import (  # noqa: E402
@@ -30,9 +31,12 @@ from Library.SW.Coords import (  # noqa: E402
 from Library.SW.Inputs import (  # noqa: E402
     build_ace_earth_swx_frame,
     build_model_input_series,
+    load_enlil_prediction_frames,
     load_ace_earth_frame,
+    load_stereo_a_frame,
     load_sw_input_frame,
 )
+from Library.SW.Stats import export_sw_forecast_stats_csv  # noqa: E402
 from Library.SW.Visualization import (  # noqa: E402
     build_satellite_comparison_frame,
     export_polar_animation,
@@ -52,7 +56,7 @@ def parse_args(argv):
     parser.add_argument(
         "--input-source",
         choices=["parquet", "sql"],
-        default="parquet",
+        default="sql",
         help="Propagation input source.",
     )
     parser.add_argument(
@@ -86,6 +90,11 @@ def parse_args(argv):
         help="Skip Earth-series parquet export.",
     )
     parser.add_argument(
+        "--skip-stats",
+        action="store_true",
+        help="Skip forecast stats CSV export.",
+    )
+    parser.add_argument(
         "--animation-fps",
         type=int,
         default=30,
@@ -97,6 +106,16 @@ def parse_args(argv):
         default=None,
         help="Optional override for animation DPI.",
     )
+    parser.add_argument(
+        "--enlil-parquet",
+        default=None,
+        help="Optional ENLIL parquet path for v_noaa comparison traces.",
+    )
+    parser.add_argument(
+        "--stats-out",
+        default=None,
+        help="Optional explicit forecast stats CSV output path.",
+    )
     return parser.parse_args(argv[1:])
 
 
@@ -106,6 +125,7 @@ def main(argv):
     end_dt = pd.Timestamp(args.end)
 
     empirical = load_empirical_spec()
+    slow_sw_patch_empirical = load_slow_sw_patch_spec()
     ballistic = load_ballistic_spec()
     runtime = load_sw_runtime_spec()
     superresolution_enabled = bool(ballistic["superresolution_enabled"])
@@ -129,6 +149,11 @@ def main(argv):
         Path(args.parquet_out)
         if args.parquet_out is not None
         else output_dir / f"SW Earth Series {stamp}.parquet"
+    )
+    stats_out = (
+        Path(args.stats_out)
+        if args.stats_out is not None
+        else animation_out.with_name(f"{animation_out.stem} Stats.csv")
     )
 
     df_sdo_sw = load_sw_input_frame(
@@ -250,18 +275,39 @@ def main(argv):
         "| non-slow / filled:",
         f"{100.0 * post.non_slow_fraction_filled:.2f}%",
     )
+    slow_sw_speed = empirical.slow_sw_speed(grid.time_axis)
+    slow_sw_patch_speed = slow_sw_patch_empirical.slow_sw_speed(grid.time_axis)
     plot_sats = [
         {
             "sat": "ace_earth",
             "label": "ACE @ Earth",
             "phi_target": ballistic["earth_phi_target"],
             "r_target": ballistic["earth_r_target"],
-        }
+        },
+        {
+            "sat": "stereo_a",
+            "label": "STEREO-A",
+            "phi_target": 0.0,
+            "r_target": ballistic["earth_r_target"],
+        },
     ]
-    satellite_frames = {"ace_earth": load_ace_earth_frame()}
+    satellite_frames = {
+        "ace_earth": load_ace_earth_frame(),
+        "stereo_a": load_stereo_a_frame(
+            time_axis=grid.time_axis,
+            time_freq=time_freq,
+        ),
+    }
     satellite_swx_frames = {
         "ace_earth": build_ace_earth_swx_frame(prepared["sdo_input_df"])
     }
+    enlil_frames = load_enlil_prediction_frames(
+        time_axis=grid.time_axis,
+        time_freq=time_freq,
+        enlil_path=args.enlil_parquet
+        if args.enlil_parquet is not None
+        else None,
+    )
     comparison_frames = {}
     for sat_spec in plot_sats:
         sat_name = sat_spec["sat"]
@@ -275,11 +321,14 @@ def main(argv):
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             df_sat=df_sat,
             df_swx=satellite_swx_frames.get(sat_name),
+            df_noaa=enlil_frames.get(sat_name),
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
-            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
+            slow_sw_speed=slow_sw_patch_speed,
+            slow_sw_patch=True,
             draw_slow_sw=True,
         )
+    sat_labels = {spec["sat"]: spec["label"] for spec in plot_sats}
     primary_sat = plot_sats[0]["sat"]
     primary_frame = comparison_frames[primary_sat]
     earth_frame_window = primary_frame.loc[grid.time_axis.min() : grid.time_axis.max()]
@@ -295,9 +344,10 @@ def main(argv):
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             comparison_frames=comparison_frames,
             time_step_minutes=time_step_minutes,
-            slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
+            slow_sw_speed=slow_sw_speed,
             draw_slow_sw=True,
             anim_fps=args.animation_fps,
+            anim_1h_mult=runtime["animation_1h_mult"],
             anim_dpi=(
                 runtime["animation_dpi"]
                 if args.animation_dpi is None
@@ -318,6 +368,18 @@ def main(argv):
     if not args.skip_parquet:
         earth_frame_window.to_parquet(parquet_out)
         print("Saved Earth-series parquet:", parquet_out)
+
+    if not args.skip_stats:
+        _stats_tables, stats_csv_frame = export_sw_forecast_stats_csv(
+            csv_outfile=stats_out,
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            time_axis=grid.time_axis,
+            slow_sw_speed=slow_sw_speed,
+            sat_labels=sat_labels,
+        )
+        print("Saved forecast stats CSV:", stats_out, "| rows:", len(stats_csv_frame))
 
     return 0
 

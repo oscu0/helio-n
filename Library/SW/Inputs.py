@@ -34,8 +34,16 @@ DEFAULT_SQL_CONNECTION = {
 
 DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
 DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
+DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A Plastic.parquet")
+DEFAULT_ENLIL_PARQUET_PATH = Path(
+    "/Users/aosh/Developer/Shock-and-Awe/Data/Custom/"
+    "2018-02-01 00-00-00-2018-07-01 00-00-00/ENLIL/ENLIL.parquet"
+)
 DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
+DEFAULT_STEREO_A_SAT = "stereo_a"
+DEFAULT_STEREO_A_LABEL = "STEREO-A"
+EARTH_RADII_PER_SOLAR_RADIUS = 109.0763707060096
 SATELLITE_FRAME_COLUMNS = [
     "v",
     "phi_target",
@@ -216,6 +224,102 @@ def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
         sat=DEFAULT_ACE_EARTH_SAT,
         label=DEFAULT_ACE_EARTH_LABEL,
     )
+
+
+def load_stereo_a_frame(
+    time_axis,
+    time_freq,
+    stereo_path=DEFAULT_STEREO_A_PARQUET_PATH,
+):
+    stereo_path = resolve_repo_path(stereo_path)
+    stereo_a_df = pd.read_parquet(
+        stereo_path,
+        columns=[
+            "V",
+            "radialDistance",
+            "heliographicLatitude",
+            "heliographicLongitude",
+        ],
+    ).copy()
+    stereo_a_df.index = pd.to_datetime(stereo_a_df.index, utc=True).tz_convert(None)
+    stereo_a_df = stereo_a_df.loc[
+        pd.Timestamp(time_axis.min()) : pd.Timestamp(time_axis.max())
+    ]
+    stereo_a_df = stereo_a_df.rename(
+        columns={
+            "V": "v",
+            "radialDistance": "r_target",
+            "heliographicLatitude": "lat_hge",
+            "heliographicLongitude": "phi_target",
+        }
+    )
+    for column in stereo_a_df.columns:
+        stereo_a_df[column] = pd.to_numeric(stereo_a_df[column], errors="coerce")
+    stereo_a_df["r_target"] = (
+        stereo_a_df["r_target"] / EARTH_RADII_PER_SOLAR_RADIUS
+    )
+    stereo_a_df = stereo_a_df.resample(time_freq).mean().reindex(time_axis)
+    stereo_a_df.attrs["sat"] = DEFAULT_STEREO_A_SAT
+    stereo_a_df.attrs["label"] = DEFAULT_STEREO_A_LABEL
+    stereo_a_df.attrs["coord_frame"] = "HGE"
+    return stereo_a_df
+
+
+def load_enlil_prediction_frames(
+    time_axis,
+    time_freq,
+    enlil_path=DEFAULT_ENLIL_PARQUET_PATH,
+    lead_days=5.0,
+    lead_tolerance=pd.Timedelta(hours=12),
+):
+    if enlil_path is None:
+        enlil_path = DEFAULT_ENLIL_PARQUET_PATH
+    enlil_path = resolve_repo_path(enlil_path)
+    enlil_raw = pd.read_parquet(
+        enlil_path,
+        columns=["time", "run_id", "Earth_V1", "STEREO_A_V1"],
+    )
+    enlil_raw["time"] = pd.to_datetime(
+        enlil_raw["time"], utc=True
+    ).dt.tz_convert(None)
+    enlil_raw["issue_dt"] = pd.to_datetime(
+        enlil_raw["run_id"].str.extract(r"_(\d{8})_\d{4}$", expand=False),
+        format="%Y%m%d",
+    )
+    enlil_raw["lead"] = enlil_raw["time"] - enlil_raw["issue_dt"]
+
+    target_lead = pd.Timedelta(days=float(lead_days))
+    enlil_selected = enlil_raw.loc[
+        (enlil_raw["lead"] >= target_lead - lead_tolerance)
+        & (enlil_raw["lead"] <= target_lead + lead_tolerance)
+    ].copy()
+    enlil_selected["lead_err"] = (enlil_selected["lead"] - target_lead).abs()
+    enlil_selected = (
+        enlil_selected.sort_values(["time", "lead_err"])
+        .drop_duplicates("time", keep="first")
+        .set_index("time")
+        .sort_index()
+    )
+
+    def build_enlil_frame(velocity_column):
+        series = (
+            pd.to_numeric(enlil_selected[velocity_column], errors="coerce") / 1000.0
+        )
+        series = series.loc[
+            pd.Timestamp(time_axis.min()) : pd.Timestamp(time_axis.max())
+        ]
+        series = (
+            series.resample(time_freq)
+            .mean()
+            .reindex(time_axis)
+            .interpolate(method="time")
+        )
+        return pd.DataFrame({"v_noaa": series})
+
+    return {
+        DEFAULT_ACE_EARTH_SAT: build_enlil_frame("Earth_V1"),
+        DEFAULT_STEREO_A_SAT: build_enlil_frame("STEREO_A_V1"),
+    }
 
 
 def build_model_input_series(
