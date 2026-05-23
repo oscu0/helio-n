@@ -151,7 +151,10 @@ def compute_forecast_stats(actual, forecast, sample_mask):
     err = paired["forecast"] - paired["actual"]
     r_value = np.nan
     if len(paired) >= 2:
-        r_value = float(paired["actual"].corr(paired["forecast"]))
+        actual_std = float(paired["actual"].std())
+        forecast_std = float(paired["forecast"].std())
+        if actual_std > 0.0 and forecast_std > 0.0:
+            r_value = float(paired["actual"].corr(paired["forecast"]))
 
     return {
         "n_samples": int(len(paired)),
