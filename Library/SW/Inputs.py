@@ -145,8 +145,9 @@ def normalize_sw_input_frame(df_input_raw, start_dt, end_dt):
             df_sdo_sw["forecast_sw_speed"], errors="coerce"
         )
 
+    window_column = "forecast_dt" if "forecast_dt" in df_sdo_sw.columns else "dt"
     df_sdo_sw = df_sdo_sw[
-        (df_sdo_sw["dt"] >= start_dt) & (df_sdo_sw["dt"] < end_dt)
+        (df_sdo_sw[window_column] >= start_dt) & (df_sdo_sw[window_column] < end_dt)
     ].copy()
     return df_sdo_sw.sort_values("dt").reset_index(drop=True)
 
