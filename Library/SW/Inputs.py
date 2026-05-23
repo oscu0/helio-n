@@ -35,10 +35,7 @@ DEFAULT_SQL_CONNECTION = {
 DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
 DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
 DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A Plastic.parquet")
-DEFAULT_ENLIL_PARQUET_PATH = Path(
-    "/Users/aosh/Developer/Shock-and-Awe/Data/Custom/"
-    "2018-02-01 00-00-00-2018-07-01 00-00-00/ENLIL/ENLIL.parquet"
-)
+DEFAULT_ENLIL_PARQUET_PATH = data_path("ENLIL 2018-02-01 2018-07-01.parquet")
 DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
 DEFAULT_STEREO_A_SAT = "stereo_a"
