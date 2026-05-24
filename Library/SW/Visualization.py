@@ -163,6 +163,121 @@ def build_satellite_comparison_frame(
     return comparison_frame.sort_index()
 
 
+def first_finite_time(frame, column):
+    if column not in frame.columns:
+        return None
+    series = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if series.empty:
+        return None
+    return pd.Timestamp(series.index.min())
+
+
+def format_time_or_na(timestamp):
+    if timestamp is None:
+        return "n/a"
+    return f"{timestamp:%Y-%m-%d %H:%M}"
+
+
+def export_solar_wind_plot(
+    plot_outfile,
+    comparison_frames,
+    start_dt,
+    end_dt,
+    sat_labels=None,
+    dpi=300,
+):
+    output_path = Path(plot_outfile)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plot_start = pd.Timestamp(start_dt)
+    plot_end = pd.Timestamp(end_dt)
+    sat_labels = {} if sat_labels is None else sat_labels
+    sw_plot_columns = [
+        (PREDICT_COLUMN, PREDICT_LINE_COLOR, 1.7, "-", "v_predict"),
+        (REAL_COLUMN, REAL_LINE_COLOR, 1.4, "-", "v_obs"),
+        (SWX_COLUMN, SWX_LINE_COLOR, 1.35, "-", "v_swx"),
+        (MICROFORECAST_COLUMN, MICROFORECAST_LINE_COLOR, 1.25, "--", "v_prev_cr"),
+        (NOAA_COLUMN, NOAA_LINE_COLOR, 1.35, "-", "v_noaa"),
+    ]
+    sw_plot_frames = [
+        (
+            sat_labels.get(sat_name, frame.attrs.get("label", sat_name)),
+            frame.loc[plot_start:plot_end].copy(),
+            sat_name,
+        )
+        for sat_name, frame in comparison_frames.items()
+    ]
+
+    y_values = []
+    for _label, frame, _sat_name in sw_plot_frames:
+        for column, _color, _linewidth, _linestyle, _legend_label in sw_plot_columns:
+            if column in frame.columns:
+                values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+                finite_values = values[np.isfinite(values)]
+                if finite_values.size > 0:
+                    y_values.append(finite_values)
+
+    if y_values:
+        y_all = np.concatenate(y_values)
+        y_min = float(np.min(y_all))
+        y_max = float(np.max(y_all))
+    else:
+        y_min, y_max = 250.0, 850.0
+    y_pad = max(10.0, 0.08 * (y_max - y_min + 1e-6))
+
+    fig, axes = plt.subplots(
+        len(sw_plot_frames),
+        1,
+        figsize=(11.0, max(3.0, 2.75 * len(sw_plot_frames))),
+        sharex=True,
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+
+    for ax_idx, (axis, (label, frame, sat_name)) in enumerate(zip(axes, sw_plot_frames)):
+        for column, color, linewidth, linestyle, legend_label in sw_plot_columns:
+            if column not in frame.columns:
+                continue
+            series = pd.to_numeric(frame[column], errors="coerce").dropna()
+            if series.empty:
+                continue
+            axis.plot(
+                series.index,
+                series.values,
+                color=color,
+                linewidth=linewidth,
+                alpha=0.95,
+                linestyle=linestyle,
+                label=legend_label,
+            )
+
+        title_text = f"{label}: {plot_start:%Y-%m-%d %H:%M} to {plot_end:%Y-%m-%d %H:%M}"
+        if sat_name == "stereo_a":
+            first_prediction_time = first_finite_time(frame, PREDICT_COLUMN)
+            title_text += (
+                " (first reached by prediction: "
+                f"{format_time_or_na(first_prediction_time)})"
+            )
+        axis.set_title(
+            title_text,
+            fontsize=10,
+            loc="left",
+        )
+        axis.set_ylabel("v (km/s)")
+        axis.grid(alpha=0.25)
+        axis.set_ylim(y_min - y_pad, y_max + y_pad)
+        axis.legend(loc="upper left", fontsize=8)
+        axis.tick_params(axis="x", labelsize=8)
+        if ax_idx < len(sw_plot_frames) - 1:
+            axis.tick_params(labelbottom=False)
+
+    axes[-1].set_xlim(plot_start, plot_end)
+    axes[-1].xaxis.set_major_locator(mdates.AutoDateLocator())
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+    return output_path
+
+
 def _build_satellite_plot_items(comparison_frames):
     sat_items = []
     for sat_idx, (sat_name, frame) in enumerate(comparison_frames.items()):

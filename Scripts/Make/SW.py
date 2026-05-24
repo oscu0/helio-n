@@ -40,6 +40,7 @@ from Library.SW.Stats import export_sw_forecast_stats_csv  # noqa: E402
 from Library.SW.Visualization import (  # noqa: E402
     build_satellite_comparison_frame,
     export_polar_animation,
+    export_solar_wind_plot,
 )
 
 
@@ -95,6 +96,11 @@ def parse_args(argv):
         help="Skip forecast stats CSV export.",
     )
     parser.add_argument(
+        "--skip-sw-plot",
+        action="store_true",
+        help="Skip solar wind time-series PDF export.",
+    )
+    parser.add_argument(
         "--animation-fps",
         type=int,
         default=30,
@@ -115,6 +121,11 @@ def parse_args(argv):
         "--stats-out",
         default=None,
         help="Optional explicit forecast stats CSV output path.",
+    )
+    parser.add_argument(
+        "--sw-plot-out",
+        default=None,
+        help="Optional explicit solar wind time-series PDF output path.",
     )
     return parser.parse_args(argv[1:])
 
@@ -154,6 +165,11 @@ def main(argv):
         Path(args.stats_out)
         if args.stats_out is not None
         else animation_out.with_name(f"{animation_out.stem} Stats.csv")
+    )
+    sw_plot_out = (
+        Path(args.sw_plot_out)
+        if args.sw_plot_out is not None
+        else output_dir / f"SW Time Series {stamp}.pdf"
     )
 
     df_sdo_sw = load_sw_input_frame(
@@ -368,6 +384,16 @@ def main(argv):
     if not args.skip_parquet:
         earth_frame_window.to_parquet(parquet_out)
         print("Saved Earth-series parquet:", parquet_out)
+
+    if not args.skip_sw_plot:
+        export_solar_wind_plot(
+            plot_outfile=sw_plot_out,
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            sat_labels=sat_labels,
+        )
+        print("Saved solar wind plot:", sw_plot_out)
 
     if not args.skip_stats:
         _stats_tables, stats_csv_frame = export_sw_forecast_stats_csv(
