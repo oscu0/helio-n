@@ -124,8 +124,7 @@ def build_satellite_comparison_frame(
                 .ffill()
                 .bfill()
             )
-            comparison_frame["v_real_unpatched"] = comparison_frame["v_real"]
-            comparison_frame.loc[patch_mask, "v_real"] = patch_values.loc[patch_mask]
+            comparison_frame.loc[patch_mask, "v_predict"] = patch_values.loc[patch_mask]
             comparison_frame["slow_sw_patch_mask"] = patch_mask
         microforecast_index = pd.DatetimeIndex(df_sat.index) + pd.Timedelta(days=float(cr_days))
         df_microforecast = pd.DataFrame(
