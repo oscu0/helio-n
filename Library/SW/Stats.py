@@ -12,6 +12,18 @@ REGIME_ORDER = [
     "no_icme",
     "no_icme_no_slow_sw",
 ]
+REGIME_SORT_ORDER = [
+    "all_sw",
+    "no_slow_sw",
+    "no_icme",
+    "no_icme_no_slow_sw",
+]
+REGIME_ORDER_BY_SAT = {
+    "stereo_a": [
+        "all_sw",
+        "no_slow_sw",
+    ],
+}
 FORECAST_COLUMNS_BY_SAT = {
     "ace_earth": [
         ("pred", "v_predict"),
@@ -124,9 +136,14 @@ def build_sat_score_frame(
 def build_regime_masks(eval_frame):
     return {
         "all_sw": pd.Series(True, index=eval_frame.index),
+        "no_slow_sw": ~eval_frame["is_slow_sw"],
         "no_icme": ~eval_frame["is_icme"],
         "no_icme_no_slow_sw": ~eval_frame["is_icme"] & ~eval_frame["is_slow_sw"],
     }
+
+
+def get_regime_order(sat_name):
+    return REGIME_ORDER_BY_SAT.get(sat_name, REGIME_ORDER)
 
 
 def compute_forecast_stats(actual, forecast, sample_mask):
@@ -199,7 +216,7 @@ def build_forecast_skill_df(
     for sat_name, eval_frame in score_frames.items():
         sat_label = sat_labels.get(sat_name, sat_name)
         regime_masks = build_regime_masks(eval_frame)
-        for regime in REGIME_ORDER:
+        for regime in get_regime_order(sat_name):
             sample_mask = regime_masks[regime]
             forecast_columns = forecast_columns_by_sat.get(
                 sat_name, DEFAULT_FORECAST_COLUMNS
@@ -235,7 +252,7 @@ def build_forecast_skill_df(
         {label: order for order, label in enumerate(sat_labels.values())}
     )
     forecast_skill_df["regime_order"] = forecast_skill_df["regime"].map(
-        {regime: order for order, regime in enumerate(REGIME_ORDER)}
+        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
     )
     forecast_skill_df["forecast_order"] = forecast_skill_df["forecast"].map(
         FORECAST_ORDER
@@ -257,7 +274,7 @@ def build_pred_vs_noaa_df(score_frames, sat_labels):
             continue
         sat_label = sat_labels.get(sat_name, sat_name)
         regime_masks = build_regime_masks(eval_frame)
-        for regime in REGIME_ORDER:
+        for regime in get_regime_order(sat_name):
             pred_vs_noaa_rows.append(
                 {
                     "sat": sat_label,
@@ -282,7 +299,7 @@ def build_pred_vs_noaa_df(score_frames, sat_labels):
         {label: order for order, label in enumerate(sat_labels.values())}
     )
     pred_vs_noaa_df["regime_order"] = pred_vs_noaa_df["regime"].map(
-        {regime: order for order, regime in enumerate(REGIME_ORDER)}
+        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
     )
     return (
         pred_vs_noaa_df.sort_values(["sat_order", "regime_order"])
