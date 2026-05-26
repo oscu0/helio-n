@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sunpy.coordinates.sun import carrington_rotation_number, carrington_rotation_time
 
 from Library.ICME import build_icme_mask
 
@@ -62,8 +63,10 @@ def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
 
 
 def prepare_eval_mask(series, eval_index, output_name, freq=SCORE_FREQ):
+    mask_source = pd.Series(series)
+    mask_values = mask_source.where(mask_source.notna(), False).astype(bool)
     prepared = pd.Series(
-        pd.Series(series).fillna(False).astype(bool).to_numpy(),
+        mask_values.to_numpy(),
         index=pd.DatetimeIndex(series.index),
         name=output_name,
     )
@@ -343,10 +346,14 @@ def build_sw_forecast_stats_csv_frame(stats_tables):
     forecast_skill_df.insert(0, "table", "forecast_skill")
 
     pred_vs_noaa_df = stats_tables["pred_vs_noaa"].reset_index()
-    pred_vs_noaa_df.insert(0, "table", "pred_vs_noaa")
-    pred_vs_noaa_df.insert(3, "forecast", "pred_vs_noaa")
+    if not pred_vs_noaa_df.empty:
+        pred_vs_noaa_df.insert(0, "table", "pred_vs_noaa")
+        pred_vs_noaa_df.insert(3, "forecast", "pred_vs_noaa")
 
-    return pd.concat([forecast_skill_df, pred_vs_noaa_df], ignore_index=True)
+    csv_frames = [forecast_skill_df]
+    if not pred_vs_noaa_df.empty:
+        csv_frames.append(pred_vs_noaa_df)
+    return pd.concat(csv_frames, ignore_index=True)
 
 
 def export_sw_forecast_stats_csv(csv_outfile, **stats_kwargs):
@@ -356,3 +363,204 @@ def export_sw_forecast_stats_csv(csv_outfile, **stats_kwargs):
     csv_frame = build_sw_forecast_stats_csv_frame(stats_tables)
     csv_frame.to_csv(output_path, index=False)
     return stats_tables, csv_frame
+
+
+def build_cr_windows(start_dt, end_dt):
+    start = pd.Timestamp(start_dt)
+    end = pd.Timestamp(end_dt)
+    rows = []
+    cr = int(np.floor(carrington_rotation_number(start)))
+    while True:
+        full_cr_start = pd.Timestamp(carrington_rotation_time(cr).datetime)
+        full_cr_end = pd.Timestamp(carrington_rotation_time(cr + 1).datetime)
+        cr_start = max(start, full_cr_start)
+        cr_end = min(end, full_cr_end)
+        if cr_start < cr_end:
+            rows.append(
+                {
+                    "cr": int(cr),
+                    "cr_start": cr_start,
+                    "cr_end": cr_end,
+                }
+            )
+        if full_cr_end >= end:
+            break
+        cr += 1
+    return pd.DataFrame(rows)
+
+
+def build_cr_sample_mask(eval_frame, cr_start, cr_end, end_dt):
+    if pd.Timestamp(cr_end) >= pd.Timestamp(end_dt):
+        mask = (eval_frame.index >= cr_start) & (eval_frame.index <= cr_end)
+    else:
+        mask = (eval_frame.index >= cr_start) & (eval_frame.index < cr_end)
+    return pd.Series(mask, index=eval_frame.index)
+
+
+def build_forecast_skill_cr_df(
+    score_frames,
+    sat_labels,
+    cr_windows,
+    end_dt,
+    forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
+):
+    rows = []
+    for cr_window in cr_windows.itertuples(index=False):
+        for sat_name, eval_frame in score_frames.items():
+            sat_label = sat_labels.get(sat_name, sat_name)
+            cr_mask = build_cr_sample_mask(
+                eval_frame=eval_frame,
+                cr_start=cr_window.cr_start,
+                cr_end=cr_window.cr_end,
+                end_dt=end_dt,
+            )
+            regime_masks = build_regime_masks(eval_frame)
+            forecast_columns = forecast_columns_by_sat.get(
+                sat_name, DEFAULT_FORECAST_COLUMNS
+            )
+            for regime in get_regime_order(sat_name):
+                sample_mask = cr_mask & regime_masks[regime]
+                for forecast_name, _column in forecast_columns:
+                    if forecast_name not in eval_frame.columns:
+                        continue
+                    rows.append(
+                        {
+                            "table": "forecast_skill",
+                            "cr": cr_window.cr,
+                            "cr_start": cr_window.cr_start,
+                            "cr_end": cr_window.cr_end,
+                            "sat": sat_label,
+                            "regime": regime,
+                            "forecast": forecast_name,
+                            **compute_forecast_stats(
+                                actual=eval_frame["obs"],
+                                forecast=eval_frame[forecast_name],
+                                sample_mask=sample_mask,
+                            ),
+                        }
+                    )
+
+    return pd.DataFrame(rows)
+
+
+def build_pred_vs_noaa_cr_df(score_frames, sat_labels, cr_windows, end_dt):
+    rows = []
+    for cr_window in cr_windows.itertuples(index=False):
+        for sat_name, eval_frame in score_frames.items():
+            if "noaa" not in eval_frame.columns or "pred" not in eval_frame.columns:
+                continue
+            sat_label = sat_labels.get(sat_name, sat_name)
+            cr_mask = build_cr_sample_mask(
+                eval_frame=eval_frame,
+                cr_start=cr_window.cr_start,
+                cr_end=cr_window.cr_end,
+                end_dt=end_dt,
+            )
+            regime_masks = build_regime_masks(eval_frame)
+            for regime in get_regime_order(sat_name):
+                rows.append(
+                    {
+                        "table": "pred_vs_noaa",
+                        "cr": cr_window.cr,
+                        "cr_start": cr_window.cr_start,
+                        "cr_end": cr_window.cr_end,
+                        "sat": sat_label,
+                        "regime": regime,
+                        "forecast": "pred_vs_noaa",
+                        **compute_forecast_stats(
+                            actual=eval_frame["noaa"],
+                            forecast=eval_frame["pred"],
+                            sample_mask=cr_mask & regime_masks[regime],
+                        ),
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
+
+def build_sw_forecast_cr_stats_csv_frame(
+    comparison_frames,
+    start_dt,
+    end_dt,
+    time_axis,
+    slow_sw_speed,
+    sat_labels,
+    freq=SCORE_FREQ,
+):
+    score_frames = build_score_frames(
+        comparison_frames=comparison_frames,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        time_axis=time_axis,
+        slow_sw_speed=slow_sw_speed,
+        freq=freq,
+    )
+    cr_windows = build_cr_windows(start_dt=start_dt, end_dt=end_dt)
+    cr_csv_frames = [
+        build_forecast_skill_cr_df(
+            score_frames=score_frames,
+            sat_labels=sat_labels,
+            cr_windows=cr_windows,
+            end_dt=end_dt,
+        ),
+        build_pred_vs_noaa_cr_df(
+            score_frames=score_frames,
+            sat_labels=sat_labels,
+            cr_windows=cr_windows,
+            end_dt=end_dt,
+        ),
+    ]
+    cr_csv_frames = [frame for frame in cr_csv_frames if not frame.empty]
+    cr_stats = (
+        pd.concat(cr_csv_frames, ignore_index=True)
+        if cr_csv_frames
+        else pd.DataFrame()
+    )
+    if cr_stats.empty:
+        return pd.DataFrame(
+            columns=[
+                "table",
+                "cr",
+                "cr_start",
+                "cr_end",
+                "sat",
+                "regime",
+                "forecast",
+                "n_samples",
+                "r",
+                "rmse",
+                "mae",
+                "bias",
+            ]
+        )
+
+    cr_stats["sat_order"] = cr_stats["sat"].map(
+        {label: order for order, label in enumerate(sat_labels.values())}
+    )
+    cr_stats["regime_order"] = cr_stats["regime"].map(
+        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
+    )
+    cr_stats["forecast_order"] = cr_stats["forecast"].map(
+        {**FORECAST_ORDER, "pred_vs_noaa": len(FORECAST_ORDER)}
+    )
+    return (
+        cr_stats.sort_values(
+            [
+                "cr",
+                "table",
+                "sat_order",
+                "regime_order",
+                "forecast_order",
+            ]
+        )
+        .drop(columns=["sat_order", "regime_order", "forecast_order"])
+        .round({"r": 3, "rmse": 1, "mae": 1, "bias": 1})
+    )
+
+
+def export_sw_forecast_cr_stats_csv(csv_outfile, **stats_kwargs):
+    output_path = Path(csv_outfile)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_frame = build_sw_forecast_cr_stats_csv_frame(**stats_kwargs)
+    csv_frame.to_csv(output_path, index=False)
+    return csv_frame

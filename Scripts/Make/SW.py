@@ -36,7 +36,10 @@ from Library.SW.Inputs import (  # noqa: E402
     load_stereo_a_frame,
     load_sw_input_frame,
 )
-from Library.SW.Stats import export_sw_forecast_stats_csv  # noqa: E402
+from Library.SW.Stats import (  # noqa: E402
+    export_sw_forecast_cr_stats_csv,
+    export_sw_forecast_stats_csv,
+)
 from Library.SW.Visualization import (  # noqa: E402
     build_satellite_comparison_frame,
     export_polar_animation,
@@ -96,6 +99,11 @@ def parse_args(argv):
         help="Skip forecast stats CSV export.",
     )
     parser.add_argument(
+        "--skip-cr-stats",
+        action="store_true",
+        help="Skip per-Carrington-rotation forecast stats CSV export.",
+    )
+    parser.add_argument(
         "--skip-sw-plot",
         action="store_true",
         help="Skip solar wind time-series PDF export.",
@@ -118,9 +126,19 @@ def parse_args(argv):
         help="Optional ENLIL parquet path for v_noaa comparison traces.",
     )
     parser.add_argument(
+        "--skip-enlil",
+        action="store_true",
+        help="Skip ENLIL/NOAA comparison traces and stats.",
+    )
+    parser.add_argument(
         "--stats-out",
         default=None,
         help="Optional explicit forecast stats CSV output path.",
+    )
+    parser.add_argument(
+        "--cr-stats-out",
+        default=None,
+        help="Optional explicit per-Carrington-rotation stats CSV output path.",
     )
     parser.add_argument(
         "--sw-plot-out",
@@ -165,6 +183,11 @@ def main(argv):
         Path(args.stats_out)
         if args.stats_out is not None
         else animation_out.with_name(f"{animation_out.stem} Stats.csv")
+    )
+    cr_stats_out = (
+        Path(args.cr_stats_out)
+        if args.cr_stats_out is not None
+        else animation_out.with_name(f"{animation_out.stem} Per-CR Stats.csv")
     )
     sw_plot_out = (
         Path(args.sw_plot_out)
@@ -317,13 +340,15 @@ def main(argv):
     satellite_swx_frames = {
         "ace_earth": build_ace_earth_swx_frame(prepared["sdo_input_df"])
     }
-    enlil_frames = load_enlil_prediction_frames(
-        time_axis=grid.time_axis,
-        time_freq=time_freq,
-        enlil_path=args.enlil_parquet
-        if args.enlil_parquet is not None
-        else None,
-    )
+    enlil_frames = {}
+    if not args.skip_enlil:
+        enlil_frames = load_enlil_prediction_frames(
+            time_axis=grid.time_axis,
+            time_freq=time_freq,
+            enlil_path=args.enlil_parquet
+            if args.enlil_parquet is not None
+            else None,
+        )
     comparison_frames = {}
     for sat_spec in plot_sats:
         sat_name = sat_spec["sat"]
@@ -406,6 +431,22 @@ def main(argv):
             sat_labels=sat_labels,
         )
         print("Saved forecast stats CSV:", stats_out, "| rows:", len(stats_csv_frame))
+        if not args.skip_cr_stats:
+            cr_stats_csv_frame = export_sw_forecast_cr_stats_csv(
+                csv_outfile=cr_stats_out,
+                comparison_frames=comparison_frames,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                time_axis=grid.time_axis,
+                slow_sw_speed=slow_sw_speed,
+                sat_labels=sat_labels,
+            )
+            print(
+                "Saved per-CR forecast stats CSV:",
+                cr_stats_out,
+                "| rows:",
+                len(cr_stats_csv_frame),
+            )
 
     return 0
 
