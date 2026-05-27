@@ -23,6 +23,7 @@ NOAA_LINE_COLOR = "tab:purple"
 AU_KM = 149597870.7
 SECONDS_PER_DAY = 86400.0
 AGE_SAMPLE_TOLERANCE = pd.Timedelta(hours=12)
+EXPORT_PLOT_FREQ = "1h"
 
 
 def find_axis_index(axis_values, target):
@@ -178,6 +179,29 @@ def format_time_or_na(timestamp):
     return f"{timestamp:%Y-%m-%d %H:%M}"
 
 
+def prepare_export_plot_series(frame, column, start_dt=None, end_dt=None, freq=EXPORT_PLOT_FREQ):
+    series = pd.Series(
+        pd.to_numeric(frame[column], errors="coerce").to_numpy(),
+        index=pd.DatetimeIndex(frame.index),
+        name=column,
+    )
+    series = series[~series.index.duplicated(keep="last")].sort_index()
+    if start_dt is not None or end_dt is not None:
+        series = series.loc[pd.Timestamp(start_dt) : pd.Timestamp(end_dt)]
+    return series.resample(freq).mean().dropna()
+
+
+def build_export_plot_frame(frame, columns, freq=EXPORT_PLOT_FREQ):
+    plot_series = [
+        prepare_export_plot_series(frame, column, freq=freq)
+        for column in columns
+        if column in frame.columns
+    ]
+    if not plot_series:
+        return pd.DataFrame(index=pd.DatetimeIndex([], name=frame.index.name))
+    return pd.concat(plot_series, axis=1)
+
+
 def export_solar_wind_plot(
     plot_outfile,
     comparison_frames,
@@ -194,8 +218,6 @@ def export_solar_wind_plot(
     sw_plot_columns = [
         (PREDICT_COLUMN, PREDICT_LINE_COLOR, 1.7, "-", "v_predict"),
         (REAL_COLUMN, REAL_LINE_COLOR, 1.4, "-", "v_obs"),
-        (SWX_COLUMN, SWX_LINE_COLOR, 1.35, "-", "v_swx"),
-        (MICROFORECAST_COLUMN, MICROFORECAST_LINE_COLOR, 1.25, "--", "v_prev_cr"),
         (NOAA_COLUMN, NOAA_LINE_COLOR, 1.35, "-", "v_noaa"),
     ]
     sw_plot_frames = [
@@ -211,7 +233,12 @@ def export_solar_wind_plot(
     for _label, frame, _sat_name in sw_plot_frames:
         for column, _color, _linewidth, _linestyle, _legend_label in sw_plot_columns:
             if column in frame.columns:
-                values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+                values = prepare_export_plot_series(
+                    frame,
+                    column,
+                    start_dt=plot_start,
+                    end_dt=plot_end,
+                ).to_numpy(dtype=float)
                 finite_values = values[np.isfinite(values)]
                 if finite_values.size > 0:
                     y_values.append(finite_values)
@@ -237,7 +264,12 @@ def export_solar_wind_plot(
         for column, color, linewidth, linestyle, legend_label in sw_plot_columns:
             if column not in frame.columns:
                 continue
-            series = pd.to_numeric(frame[column], errors="coerce").dropna()
+            series = prepare_export_plot_series(
+                frame,
+                column,
+                start_dt=plot_start,
+                end_dt=plot_end,
+            )
             if series.empty:
                 continue
             axis.plot(
@@ -281,15 +313,25 @@ def export_solar_wind_plot(
 def _build_satellite_plot_items(comparison_frames):
     sat_items = []
     for sat_idx, (sat_name, frame) in enumerate(comparison_frames.items()):
+        plot_columns = [
+            column
+            for column in (
+                PREDICT_COLUMN,
+                REAL_COLUMN,
+                NOAA_COLUMN,
+            )
+            if column in frame.columns
+        ]
         sat_items.append(
             {
                 "sat_name": sat_name,
                 "frame": frame,
+                "panel_frame": build_export_plot_frame(frame, plot_columns),
                 "label": frame.attrs.get("label", sat_name),
                 "predict_col": PREDICT_COLUMN if PREDICT_COLUMN in frame.columns else None,
                 "real_col": REAL_COLUMN if REAL_COLUMN in frame.columns else None,
-                "swx_col": SWX_COLUMN if SWX_COLUMN in frame.columns else None,
-                "microforecast_col": MICROFORECAST_COLUMN if MICROFORECAST_COLUMN in frame.columns else None,
+                "swx_col": None,
+                "microforecast_col": None,
                 "noaa_col": NOAA_COLUMN if NOAA_COLUMN in frame.columns else None,
                 "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
             }
@@ -349,6 +391,7 @@ def _format_satellite_panel_title(label, window_before_days, window_after_days, 
 def _resolve_panel_ylim(sat_items):
     y_parts = []
     for sat_item in sat_items:
+        panel_frame = sat_item["panel_frame"]
         for column in (
             sat_item["predict_col"],
             sat_item["real_col"],
@@ -358,7 +401,7 @@ def _resolve_panel_ylim(sat_items):
         ):
             if column is None:
                 continue
-            values = sat_item["frame"][column].to_numpy(dtype=float)
+            values = panel_frame[column].to_numpy(dtype=float)
             finite = values[np.isfinite(values)]
             if finite.size > 0:
                 y_parts.append(finite)
@@ -413,7 +456,7 @@ def _update_panel_windows(sat_items, current_time, window_before_days, window_af
     window_start = current_time - pd.Timedelta(days=float(window_before_days))
     window_end = current_time + pd.Timedelta(days=float(window_after_days))
     for sat_item in sat_items:
-        compare_window = sat_item["frame"].loc[window_start:window_end]
+        compare_window = sat_item["panel_frame"].loc[window_start:window_end]
         if sat_item["predict_line"] is not None:
             sat_item["predict_line"].set_data(
                 compare_window.index,
