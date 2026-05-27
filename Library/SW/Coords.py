@@ -5,6 +5,13 @@ import pandas as pd
 
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS, SOLAR_RADIUS_KM
 
+DENSE_PEAK_BYTES_PER_CELL = (
+    np.dtype(np.float32).itemsize  # V_accum_max
+    + np.dtype(np.int32).itemsize  # cr_flat
+    + np.dtype(np.float32).itemsize  # postprocess V_accum_max copy
+    + np.dtype(bool).itemsize  # slow_sw_pred_max
+)
+
 
 @dataclass(frozen=True)
 class RotationState:
@@ -87,12 +94,13 @@ def build_grid_axes(
         assert phi_axis.size > 0, "phi_values must contain at least one target phi"
     r_axis = build_r_axis(r0=r0, r_max=r_max, r_step=r_step)
     n_cells = int(len(time_axis) * len(phi_axis) * len(r_axis))
-    est_runtime_gb = (n_cells * 4 * 1.6) / 1e9
+    est_runtime_gb = (n_cells * DENSE_PEAK_BYTES_PER_CELL) / 1e9
     if memory_guard_enabled:
         assert est_runtime_gb <= float(dense_memory_budget_gb), (
-            f"Estimated memory {est_runtime_gb:.2f} GB exceeds budget "
-            f"{float(dense_memory_budget_gb):.2f} GB. Reduce date range, increase "
-            "phi_step_minutes, or disable superresolution."
+            f"Estimated dense peak memory {est_runtime_gb:.2f} GB exceeds budget "
+            f"{float(dense_memory_budget_gb):.2f} GB. This estimate includes the "
+            "accumulator grid, CR reset grid, post-processing copy, and slow-SW mask. "
+            "Reduce date range, increase phi_step_minutes, or disable superresolution."
         )
     return GridState(
         time_axis=time_axis,
