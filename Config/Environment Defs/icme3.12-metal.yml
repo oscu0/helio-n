@@ -19,6 +19,7 @@ dependencies:
 
       # Core numerics / imaging
       - numpy
+      - numba
       - pandas
       - scipy
       - scikit-image
@@ -60,5 +61,6 @@ dependencies:
       - rich
       - openpyxl
       - requests
-      - psycopg
+      - "psycopg[binary]"
+      - paramiko
       - cx_Oracle
