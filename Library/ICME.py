@@ -1,10 +1,15 @@
-from pathlib import Path
-
 import pandas as pd
 
-from Library.Paths import data_path, resolve_repo_path
+from Library.Paths import PROJECT_ROOT, data_path, resolve_repo_path
 
-DEFAULT_ICME_CSV_PATH = data_path("merged_icme_short.csv")
+GENERATED_ICME_CSV_PATH = (
+    PROJECT_ROOT.parent / "ICME_list" / "out" / "site" / "merged_icme_short.csv"
+)
+DEFAULT_ICME_CSV_PATH = (
+    GENERATED_ICME_CSV_PATH
+    if GENERATED_ICME_CSV_PATH.exists()
+    else data_path("merged_icme_short.csv")
+)
 DEFAULT_POST_ICME_BODY_END_TOLERANCE = pd.Timedelta(hours=12)
 
 
