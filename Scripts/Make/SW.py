@@ -49,7 +49,7 @@ from Library.SW.Visualization import (  # noqa: E402
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="Build the SW animation and Earth-series parquet for a date range."
+        description="Build the SW animation and satellite-series parquet for a date range."
     )
     parser.add_argument(
         "start", help="Inclusive start datetime accepted by pandas.Timestamp"
@@ -81,7 +81,12 @@ def parse_args(argv):
     parser.add_argument(
         "--parquet-out",
         default=None,
-        help="Optional explicit Earth-series parquet output path.",
+        help="Optional explicit satellite-series parquet output path.",
+    )
+    parser.add_argument(
+        "--reproduction-parquet-out",
+        default=None,
+        help="Optional explicit reproduction parquet output path with cached inputs.",
     )
     parser.add_argument(
         "--skip-animation",
@@ -91,7 +96,7 @@ def parse_args(argv):
     parser.add_argument(
         "--skip-parquet",
         action="store_true",
-        help="Skip Earth-series parquet export.",
+        help="Skip satellite-series and reproduction parquet exports.",
     )
     parser.add_argument(
         "--skip-stats",
@@ -177,7 +182,12 @@ def main(argv):
     parquet_out = (
         Path(args.parquet_out)
         if args.parquet_out is not None
-        else output_dir / f"SW Earth Series {stamp}.parquet"
+        else output_dir / f"SW Satellite Series {stamp}.parquet"
+    )
+    reproduction_parquet_out = (
+        Path(args.reproduction_parquet_out)
+        if args.reproduction_parquet_out is not None
+        else output_dir / f"SW Reproduction Series {stamp}.parquet"
     )
     stats_out = (
         Path(args.stats_out)
@@ -370,9 +380,31 @@ def main(argv):
             draw_slow_sw=True,
         )
     sat_labels = {spec["sat"]: spec["label"] for spec in plot_sats}
-    primary_sat = plot_sats[0]["sat"]
-    primary_frame = comparison_frames[primary_sat]
-    earth_frame_window = primary_frame.loc[grid.time_axis.min() : grid.time_axis.max()]
+    satellite_frame_window = pd.concat(
+        {
+            sat_name: frame.loc[grid.time_axis.min() : grid.time_axis.max()]
+            for sat_name, frame in comparison_frames.items()
+        },
+        axis="columns",
+    )
+    input_frame_window = pd.concat(
+        {
+            "ch_area": prepared["df_ch_area"].loc[
+                grid.time_axis.min() : grid.time_axis.max()
+            ],
+            "model_input": prepared["df_v"].loc[
+                grid.time_axis.min() : grid.time_axis.max()
+            ].rename(columns={"v": "v_empirical"}),
+        },
+        axis="columns",
+    )
+    reproduction_frame = pd.concat(
+        {
+            "satellite": satellite_frame_window,
+            "input": input_frame_window,
+        },
+        axis="columns",
+    )
 
     if not args.skip_animation:
         animation_stats = export_polar_animation(
@@ -407,8 +439,10 @@ def main(argv):
         )
 
     if not args.skip_parquet:
-        earth_frame_window.to_parquet(parquet_out)
-        print("Saved Earth-series parquet:", parquet_out)
+        satellite_frame_window.to_parquet(parquet_out)
+        print("Saved satellite-series parquet:", parquet_out)
+        reproduction_frame.to_parquet(reproduction_parquet_out)
+        print("Saved reproduction parquet:", reproduction_parquet_out)
 
     if not args.skip_sw_plot:
         export_solar_wind_plot(
