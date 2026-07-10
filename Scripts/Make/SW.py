@@ -157,6 +157,10 @@ def main(argv):
     args = parse_args(argv)
     start_dt = pd.Timestamp(args.start)
     end_dt = pd.Timestamp(args.end)
+    assert start_dt < end_dt, (
+        f"Expected start datetime before end datetime; got start={start_dt} "
+        f"and end={end_dt}"
+    )
 
     empirical = load_empirical_spec()
     slow_sw_patch_empirical = load_slow_sw_patch_spec()
