@@ -41,6 +41,8 @@ from Library.SW.Stats import (  # noqa: E402
     export_sw_forecast_stats_csv,
 )
 from Library.SW.Visualization import (  # noqa: E402
+    PREDICT_COLUMN,
+    PREDICT_RAW_COLUMN,
     build_satellite_comparison_frame,
     export_polar_animation,
     export_solar_wind_plot,
@@ -128,12 +130,20 @@ def parse_args(argv):
     parser.add_argument(
         "--enlil-parquet",
         default=None,
-        help="Optional ENLIL parquet path for v_noaa comparison traces.",
+        help="Optional ENLIL parquet path used with --enlil.",
     )
     parser.add_argument(
-        "--skip-enlil",
+        "--enlil",
         action="store_true",
-        help="Skip ENLIL/NOAA comparison traces and stats.",
+        help="Include ENLIL/NOAA comparison traces and stats. Default: off.",
+    )
+    parser.add_argument(
+        "--slow-sw",
+        action="store_true",
+        help=(
+            "Apply the empirical slow-wind patch to ACE. "
+            "Default: use the raw constant-filled prediction."
+        ),
     )
     parser.add_argument(
         "--stats-out",
@@ -355,7 +365,7 @@ def main(argv):
         "ace_earth": build_ace_earth_swx_frame(prepared["sdo_input_df"])
     }
     enlil_frames = {}
-    if not args.skip_enlil:
+    if args.enlil:
         enlil_frames = load_enlil_prediction_frames(
             time_axis=grid.time_axis,
             time_freq=time_freq,
@@ -380,7 +390,7 @@ def main(argv):
             phi_target=sat_spec["phi_target"],
             r_target=sat_spec["r_target"],
             slow_sw_speed=slow_sw_patch_speed,
-            slow_sw_patch=True,
+            slow_sw_patch=args.slow_sw,
             draw_slow_sw=True,
         )
     sat_labels = {spec["sat"]: spec["label"] for spec in plot_sats}
@@ -455,6 +465,7 @@ def main(argv):
             start_dt=start_dt,
             end_dt=end_dt,
             sat_labels=sat_labels,
+            predict_column=PREDICT_COLUMN if args.slow_sw else PREDICT_RAW_COLUMN,
         )
         print("Saved solar wind plot:", sw_plot_out)
 

@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 
 PREDICT_COLUMN = "v_predict"
+PREDICT_RAW_COLUMN = "v_predict_raw"
 REAL_COLUMN = "v_real"
 SWX_COLUMN = "v_swx"
 MICROFORECAST_COLUMN = "v_1cr_ago"
@@ -208,6 +209,7 @@ def export_solar_wind_plot(
     start_dt,
     end_dt,
     sat_labels=None,
+    predict_column=PREDICT_COLUMN,
     dpi=300,
 ):
     output_path = Path(plot_outfile)
@@ -216,8 +218,10 @@ def export_solar_wind_plot(
     plot_end = pd.Timestamp(end_dt)
     sat_labels = {} if sat_labels is None else sat_labels
     sw_plot_columns = [
-        (PREDICT_COLUMN, PREDICT_LINE_COLOR, 1.7, "-", "v_predict"),
+        (predict_column, PREDICT_LINE_COLOR, 1.7, "-", predict_column),
         (REAL_COLUMN, REAL_LINE_COLOR, 1.4, "-", "v_obs"),
+        (SWX_COLUMN, SWX_LINE_COLOR, 1.35, "-", "v_swx"),
+        (MICROFORECAST_COLUMN, MICROFORECAST_LINE_COLOR, 1.25, "--", "v_prev_cr"),
         (NOAA_COLUMN, NOAA_LINE_COLOR, 1.35, "-", "v_noaa"),
     ]
     sw_plot_frames = [
@@ -284,7 +288,7 @@ def export_solar_wind_plot(
 
         title_text = f"{label}: {plot_start:%Y-%m-%d %H:%M} to {plot_end:%Y-%m-%d %H:%M}"
         if sat_name == "stereo_a":
-            first_prediction_time = first_finite_time(frame, PREDICT_COLUMN)
+            first_prediction_time = first_finite_time(frame, predict_column)
             title_text += (
                 " (first reached by prediction: "
                 f"{format_time_or_na(first_prediction_time)})"
