@@ -47,7 +47,9 @@ DEFAULT_FORECAST_COLUMNS = [
 
 
 def build_eval_index(start_dt, end_dt, freq=SCORE_FREQ):
-    return pd.date_range(pd.Timestamp(start_dt), pd.Timestamp(end_dt), freq=freq)
+    return pd.date_range(
+        pd.Timestamp(start_dt), pd.Timestamp(end_dt), freq=freq, inclusive="left"
+    )
 
 
 def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
@@ -389,11 +391,8 @@ def build_cr_windows(start_dt, end_dt):
     return pd.DataFrame(rows)
 
 
-def build_cr_sample_mask(eval_frame, cr_start, cr_end, end_dt):
-    if pd.Timestamp(cr_end) >= pd.Timestamp(end_dt):
-        mask = (eval_frame.index >= cr_start) & (eval_frame.index <= cr_end)
-    else:
-        mask = (eval_frame.index >= cr_start) & (eval_frame.index < cr_end)
+def build_cr_sample_mask(eval_frame, cr_start, cr_end):
+    mask = (eval_frame.index >= cr_start) & (eval_frame.index < cr_end)
     return pd.Series(mask, index=eval_frame.index)
 
 
@@ -401,7 +400,6 @@ def build_forecast_skill_cr_df(
     score_frames,
     sat_labels,
     cr_windows,
-    end_dt,
     forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
 ):
     rows = []
@@ -412,7 +410,6 @@ def build_forecast_skill_cr_df(
                 eval_frame=eval_frame,
                 cr_start=cr_window.cr_start,
                 cr_end=cr_window.cr_end,
-                end_dt=end_dt,
             )
             regime_masks = build_regime_masks(eval_frame)
             forecast_columns = forecast_columns_by_sat.get(
@@ -443,7 +440,7 @@ def build_forecast_skill_cr_df(
     return pd.DataFrame(rows)
 
 
-def build_pred_vs_noaa_cr_df(score_frames, sat_labels, cr_windows, end_dt):
+def build_pred_vs_noaa_cr_df(score_frames, sat_labels, cr_windows):
     rows = []
     for cr_window in cr_windows.itertuples(index=False):
         for sat_name, eval_frame in score_frames.items():
@@ -454,7 +451,6 @@ def build_pred_vs_noaa_cr_df(score_frames, sat_labels, cr_windows, end_dt):
                 eval_frame=eval_frame,
                 cr_start=cr_window.cr_start,
                 cr_end=cr_window.cr_end,
-                end_dt=end_dt,
             )
             regime_masks = build_regime_masks(eval_frame)
             for regime in get_regime_order(sat_name):
@@ -501,13 +497,11 @@ def build_sw_forecast_cr_stats_csv_frame(
             score_frames=score_frames,
             sat_labels=sat_labels,
             cr_windows=cr_windows,
-            end_dt=end_dt,
         ),
         build_pred_vs_noaa_cr_df(
             score_frames=score_frames,
             sat_labels=sat_labels,
             cr_windows=cr_windows,
-            end_dt=end_dt,
         ),
     ]
     cr_csv_frames = [frame for frame in cr_csv_frames if not frame.empty]
