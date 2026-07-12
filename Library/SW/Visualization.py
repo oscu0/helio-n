@@ -307,8 +307,9 @@ def export_solar_wind_plot(
             axis.tick_params(labelbottom=False)
 
     axes[-1].set_xlim(plot_start, plot_end)
-    axes[-1].xaxis.set_major_locator(mdates.AutoDateLocator())
-    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M"))
+    date_locator = mdates.AutoDateLocator()
+    axes[-1].xaxis.set_major_locator(date_locator)
+    axes[-1].xaxis.set_major_formatter(mdates.ConciseDateFormatter(date_locator))
     fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
     return output_path
