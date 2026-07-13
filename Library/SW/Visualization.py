@@ -8,6 +8,7 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
+from Library.SW.Stats import build_icme_duration_by_cr, build_recurrent_series
 
 PREDICT_COLUMN = "v_predict"
 PREDICT_RAW_COLUMN = "v_predict_raw"
@@ -111,7 +112,6 @@ def build_satellite_comparison_frame(
             df_sat[["v"]].rename(columns={"v": "v_real"}),
             how="outer",
         )
-        comparison_frame["v_real"] = comparison_frame["v_real"].interpolate(method="time")
         if slow_sw_patch and df_sat.attrs.get("sat") == "ace_earth":
             assert slow_sw_speed is not None, "slow_sw_patch requires slow_sw_speed for ACE @ Earth"
             slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
@@ -128,35 +128,31 @@ def build_satellite_comparison_frame(
             )
             comparison_frame.loc[patch_mask, "v_predict"] = patch_values.loc[patch_mask]
             comparison_frame["slow_sw_patch_mask"] = patch_mask
-        microforecast_index = pd.DatetimeIndex(df_sat.index) + pd.Timedelta(days=float(cr_days))
-        df_microforecast = pd.DataFrame(
-            {"v_1cr_ago": pd.to_numeric(df_sat["v"], errors="coerce").to_numpy()},
-            index=microforecast_index,
-        ).sort_index()
-        # cr_days is not a multiple of time_freq, so an outer join on the full
-        # microforecast index would interleave off-grid rows with the time_axis
-        # grid and leave v_predict NaN at every other row. Extend the index
-        # only with the tail past the current end (to keep future v_1cr_ago
-        # values visible in the panel window), then interpolate v_1cr_ago onto
-        # the existing grid using the raw microforecast as the source.
-        existing_max = comparison_frame.index.max()
-        microforecast_tail = df_microforecast.loc[df_microforecast.index > existing_max]
-        if len(microforecast_tail) > 0:
-            comparison_frame = comparison_frame.join(microforecast_tail, how="outer")
-        v_1cr_source = df_microforecast["v_1cr_ago"]
-        combined_index = comparison_frame.index.union(v_1cr_source.index)
-        v_1cr_interp = v_1cr_source.reindex(combined_index).interpolate(method="time")
-        comparison_frame["v_1cr_ago"] = v_1cr_interp.reindex(comparison_frame.index)
+        recurrent_index = pd.date_range(
+            comparison_frame.index.min().floor(EXPORT_PLOT_FREQ),
+            (
+                pd.Timestamp(df_sat.index.max())
+                + pd.Timedelta(days=float(cr_days))
+            ).ceil(EXPORT_PLOT_FREQ),
+            freq=EXPORT_PLOT_FREQ,
+        )
+        recurrent = build_recurrent_series(
+            observed_series=df_sat["v"],
+            target_index=recurrent_index,
+            cr_days=cr_days,
+        )
+        comparison_frame = comparison_frame.reindex(
+            comparison_frame.index.union(recurrent_index)
+        )
+        comparison_frame["v_1cr_ago"] = recurrent.reindex(comparison_frame.index)
     if df_sat is not None and "lat_hgs" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
     if df_sat is not None and "lat_hge" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hge"]], how="left")
     if df_swx is not None and "v_swx" in df_swx.columns:
         comparison_frame = comparison_frame.join(df_swx[["v_swx"]], how="outer")
-        comparison_frame["v_swx"] = comparison_frame["v_swx"].interpolate(method="time")
     if df_noaa is not None and "v_noaa" in df_noaa.columns:
         comparison_frame = comparison_frame.join(df_noaa[["v_noaa"]], how="outer")
-        comparison_frame["v_noaa"] = comparison_frame["v_noaa"].interpolate(method="time")
 
     if df_sat is not None:
         comparison_frame.attrs.update(df_sat.attrs)
@@ -189,7 +185,7 @@ def prepare_export_plot_series(frame, column, start_dt=None, end_dt=None, freq=E
     series = series[~series.index.duplicated(keep="last")].sort_index()
     if start_dt is not None or end_dt is not None:
         series = series.loc[pd.Timestamp(start_dt) : pd.Timestamp(end_dt)]
-    return series.resample(freq).mean().dropna()
+    return series.resample(freq).mean()
 
 
 def build_export_plot_frame(frame, columns, freq=EXPORT_PLOT_FREQ):
@@ -313,6 +309,88 @@ def export_solar_wind_plot(
     fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
     return output_path
+
+
+def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
+    """Plot one spacecraft, selected by its exact value in the ``sat`` column."""
+    labels = {
+        "raw_vs_observed": "Raw model",
+        "recurrent_vs_observed": "Recurrent forecast",
+    }
+    if comparison_labels is not None:
+        labels.update(comparison_labels)
+
+    comparison_styles = {
+        "raw_vs_observed": "tab:red",
+        "recurrent_vs_observed": "tab:blue",
+    }
+    regime_styles = {
+        "all_sw": ("-", "o", "All solar wind"),
+        "no_icme": ("--", "s", "ICME excluded"),
+    }
+    sat_stats = cr_stats.loc[cr_stats["sat"] == sat].copy()
+    assert not sat_stats.empty, f"No per-rotation statistics found for sat={sat!r}"
+    sat_stats["cr"] = pd.to_numeric(sat_stats["cr"], errors="coerce")
+    sat_stats["r"] = pd.to_numeric(sat_stats["r"], errors="coerce")
+
+    fig, (correlation_axis, event_axis) = plt.subplots(
+        2,
+        1,
+        figsize=(10.0, 6.3),
+        sharex=True,
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0]},
+    )
+
+    for comparison, color in comparison_styles.items():
+        for regime, (linestyle, marker, regime_label) in regime_styles.items():
+            line_data = sat_stats.loc[
+                (sat_stats["comparison"] == comparison)
+                & (sat_stats["regime"] == regime)
+            ].sort_values("cr")
+            if line_data.empty:
+                continue
+            correlation_axis.plot(
+                line_data["cr"],
+                line_data["r"],
+                color=color,
+                linestyle=linestyle,
+                marker=marker,
+                markersize=4.5,
+                linewidth=1.4,
+                label=f"{labels[comparison]}, {regime_label}",
+            )
+
+    correlation_axis.axhline(0.0, color="0.5", linewidth=0.8)
+    correlation_axis.set_ylim(-1.0, 1.0)
+    correlation_axis.set_ylabel("Pearson correlation, r")
+    correlation_axis.set_title(sat, loc="left")
+    correlation_axis.grid(alpha=0.25)
+    correlation_axis.legend(loc="best", fontsize=8, ncols=2)
+
+    duration_data = build_icme_duration_by_cr(
+        cr_stats=cr_stats,
+        events=events,
+        sat=sat,
+    )
+    event_axis.hlines(
+        duration_data["icme_duration_hours"],
+        duration_data["cr"] - 0.42,
+        duration_data["cr"] + 0.42,
+        color="tab:orange",
+        linewidth=3.0,
+        zorder=3,
+    )
+    event_axis.set_ylabel("ICME duration per CR (h)")
+    event_axis.set_xlabel("Carrington rotation")
+    event_axis.set_ylim(bottom=0.0)
+    event_axis.set_xlim(
+        duration_data["cr"].min() - 0.5,
+        duration_data["cr"].max() + 0.5,
+    )
+    event_axis.grid(alpha=0.25)
+
+    return fig
 
 
 def _build_satellite_plot_items(comparison_frames):

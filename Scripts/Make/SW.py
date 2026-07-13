@@ -36,22 +36,15 @@ from Library.SW.Inputs import (  # noqa: E402
     load_stereo_a_frame,
     load_sw_input_frame,
 )
-from Library.SW.Stats import (  # noqa: E402
-    export_sw_forecast_cr_stats_csv,
-    export_sw_forecast_stats_csv,
-)
 from Library.SW.Visualization import (  # noqa: E402
-    PREDICT_COLUMN,
-    PREDICT_RAW_COLUMN,
     build_satellite_comparison_frame,
     export_polar_animation,
-    export_solar_wind_plot,
 )
 
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="Build the SW animation and satellite-series parquet for a date range."
+        description="Propagate SW and export the animation and reproduction parquets."
     )
     parser.add_argument(
         "start", help="Inclusive start datetime accepted by pandas.Timestamp"
@@ -101,21 +94,6 @@ def parse_args(argv):
         help="Skip satellite-series and reproduction parquet exports.",
     )
     parser.add_argument(
-        "--skip-stats",
-        action="store_true",
-        help="Skip forecast stats CSV export.",
-    )
-    parser.add_argument(
-        "--skip-cr-stats",
-        action="store_true",
-        help="Skip per-Carrington-rotation forecast stats CSV export.",
-    )
-    parser.add_argument(
-        "--skip-sw-plot",
-        action="store_true",
-        help="Skip solar wind time-series PDF export.",
-    )
-    parser.add_argument(
         "--animation-fps",
         type=int,
         default=30,
@@ -135,7 +113,7 @@ def parse_args(argv):
     parser.add_argument(
         "--enlil",
         action="store_true",
-        help="Include ENLIL/NOAA comparison traces and stats. Default: off.",
+        help="Include ENLIL/NOAA series in the reproduction parquet. Default: off.",
     )
     parser.add_argument(
         "--slow-sw",
@@ -144,21 +122,6 @@ def parse_args(argv):
             "Apply the empirical slow-wind patch to ACE. "
             "Default: use the raw constant-filled prediction."
         ),
-    )
-    parser.add_argument(
-        "--stats-out",
-        default=None,
-        help="Optional explicit forecast stats CSV output path.",
-    )
-    parser.add_argument(
-        "--cr-stats-out",
-        default=None,
-        help="Optional explicit per-Carrington-rotation stats CSV output path.",
-    )
-    parser.add_argument(
-        "--sw-plot-out",
-        default=None,
-        help="Optional explicit solar wind time-series PDF output path.",
     )
     return parser.parse_args(argv[1:])
 
@@ -203,22 +166,6 @@ def main(argv):
         if args.reproduction_parquet_out is not None
         else output_dir / f"SW Reproduction Series {stamp}.parquet"
     )
-    stats_out = (
-        Path(args.stats_out)
-        if args.stats_out is not None
-        else animation_out.with_name(f"{animation_out.stem} Stats.csv")
-    )
-    cr_stats_out = (
-        Path(args.cr_stats_out)
-        if args.cr_stats_out is not None
-        else animation_out.with_name(f"{animation_out.stem} Per-CR Stats.csv")
-    )
-    sw_plot_out = (
-        Path(args.sw_plot_out)
-        if args.sw_plot_out is not None
-        else output_dir / f"SW Time Series {stamp}.pdf"
-    )
-
     df_sdo_sw = load_sw_input_frame(
         start_dt=start_dt,
         end_dt=end_dt,
@@ -393,7 +340,6 @@ def main(argv):
             slow_sw_patch=args.slow_sw,
             draw_slow_sw=True,
         )
-    sat_labels = {spec["sat"]: spec["label"] for spec in plot_sats}
     satellite_frame_window = pd.concat(
         {
             sat_name: frame.loc[grid.time_axis.min() : grid.time_axis.max()]
@@ -457,45 +403,6 @@ def main(argv):
         print("Saved satellite-series parquet:", parquet_out)
         reproduction_frame.to_parquet(reproduction_parquet_out)
         print("Saved reproduction parquet:", reproduction_parquet_out)
-
-    if not args.skip_sw_plot:
-        export_solar_wind_plot(
-            plot_outfile=sw_plot_out,
-            comparison_frames=comparison_frames,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            sat_labels=sat_labels,
-            predict_column=PREDICT_COLUMN if args.slow_sw else PREDICT_RAW_COLUMN,
-        )
-        print("Saved solar wind plot:", sw_plot_out)
-
-    if not args.skip_stats:
-        _stats_tables, stats_csv_frame = export_sw_forecast_stats_csv(
-            csv_outfile=stats_out,
-            comparison_frames=comparison_frames,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            time_axis=grid.time_axis,
-            slow_sw_speed=slow_sw_speed,
-            sat_labels=sat_labels,
-        )
-        print("Saved forecast stats CSV:", stats_out, "| rows:", len(stats_csv_frame))
-        if not args.skip_cr_stats:
-            cr_stats_csv_frame = export_sw_forecast_cr_stats_csv(
-                csv_outfile=cr_stats_out,
-                comparison_frames=comparison_frames,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                time_axis=grid.time_axis,
-                slow_sw_speed=slow_sw_speed,
-                sat_labels=sat_labels,
-            )
-            print(
-                "Saved per-CR forecast stats CSV:",
-                cr_stats_out,
-                "| rows:",
-                len(cr_stats_csv_frame),
-            )
 
     return 0
 

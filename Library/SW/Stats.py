@@ -4,52 +4,141 @@ import numpy as np
 import pandas as pd
 from sunpy.coordinates.sun import carrington_rotation_number, carrington_rotation_time
 
-from Library.ICME import build_icme_mask
+from Library.ICME import (
+    DEFAULT_POST_ICME_BODY_END_TOLERANCE,
+    build_icme_mask,
+    load_icmecat_windows,
+    load_icme_windows,
+)
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
+from Library.SW.Inputs import load_ace_earth_frame, load_stereo_a_frame
 
 SCORE_FREQ = "1h"
-FORECAST_ORDER = {"pred": 0, "prev_cr": 1, "swx": 2, "noaa": 3}
-REGIME_ORDER = [
-    "all_sw",
-    "no_icme",
-    "no_icme_no_slow_sw",
+REGIME_ORDER = ["all_sw", "no_icme"]
+COMPARISON_ORDER = [
+    "raw_vs_observed",
+    "recurrent_vs_observed",
+    "slow_model_vs_swx",
 ]
-REGIME_SORT_ORDER = [
-    "all_sw",
-    "no_slow_sw",
-    "no_icme",
-    "no_icme_no_slow_sw",
-]
-REGIME_ORDER_BY_SAT = {
-    "stereo_a": [
-        "all_sw",
-        "no_slow_sw",
-    ],
-}
-FORECAST_COLUMNS_BY_SAT = {
+PAPER_COMPARISONS_BY_SAT = {
     "ace_earth": [
-        ("pred", "v_predict"),
-        ("prev_cr", "v_1cr_ago"),
-        ("swx", "v_swx"),
-        ("noaa", "v_noaa"),
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "slow_model_vs_swx",
+            "reference": "v_swx",
+            "candidate": "v_predict",
+            "regimes": ["all_sw"],
+        },
     ],
     "stereo_a": [
-        ("pred", "v_predict"),
-        ("prev_cr", "v_1cr_ago"),
-        ("noaa", "v_noaa"),
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
     ],
 }
-DEFAULT_FORECAST_COLUMNS = [
-    ("pred", "v_predict"),
-    ("prev_cr", "v_1cr_ago"),
-    ("swx", "v_swx"),
-    ("noaa", "v_noaa"),
-]
+
+
+def build_recurrent_series(
+    observed_series,
+    target_index,
+    cr_days=CARRINGTON_ROTATION_DAYS,
+    max_source_gap=SCORE_FREQ,
+):
+    """Shift observations by one rotation without bridging source-data gaps."""
+    source = pd.Series(
+        pd.to_numeric(observed_series, errors="coerce").to_numpy(),
+        index=pd.DatetimeIndex(observed_series.index),
+        name="v_1cr_ago",
+    )
+    source = (
+        source[~source.index.duplicated(keep="last")]
+        .sort_index()
+        .resample(SCORE_FREQ)
+        .mean()
+        .dropna()
+    )
+    source.index = source.index + pd.Timedelta(days=float(cr_days))
+
+    target_index = pd.DatetimeIndex(target_index)
+    combined_index = source.index.union(target_index).sort_values()
+    source_times = pd.Series(source.index, index=source.index)
+    previous_time = source_times.reindex(combined_index).ffill()
+    next_time = source_times.reindex(combined_index).bfill()
+    bounded = (next_time - previous_time) <= pd.Timedelta(max_source_gap)
+    interpolated = source.reindex(combined_index).interpolate(method="time")
+    return interpolated.reindex(target_index).where(bounded.reindex(target_index))
 
 
 def build_eval_index(start_dt, end_dt, freq=SCORE_FREQ):
     return pd.date_range(
         pd.Timestamp(start_dt), pd.Timestamp(end_dt), freq=freq, inclusive="left"
     )
+
+
+def restore_observed_and_recurrent_series(
+    comparison_frames,
+    start_dt,
+    end_dt,
+    freq=SCORE_FREQ,
+):
+    """Replace gap-filled parquet series with native cached observations."""
+    eval_index = build_eval_index(start_dt=start_dt, end_dt=end_dt, freq=freq)
+    source_index = pd.date_range(
+        (
+            pd.Timestamp(start_dt)
+            - pd.Timedelta(days=CARRINGTON_ROTATION_DAYS)
+        ).floor(freq),
+        pd.Timestamp(end_dt),
+        freq=freq,
+        inclusive="left",
+    )
+    observed_frames = {
+        "ace_earth": load_ace_earth_frame(),
+        "stereo_a": load_stereo_a_frame(
+            time_axis=source_index,
+            time_freq=freq,
+        ),
+    }
+
+    restored_frames = {}
+    for sat_name, frame in comparison_frames.items():
+        assert sat_name in observed_frames, (
+            f"No native observation loader configured for satellite: {sat_name}"
+        )
+        observed_frame = observed_frames[sat_name]
+        observed = observed_frame["v"].resample(freq).mean().reindex(eval_index)
+        recurrent = build_recurrent_series(
+            observed_series=observed_frame["v"],
+            target_index=eval_index,
+            max_source_gap=freq,
+        )
+
+        restored = frame.copy()
+        restored["v_real"] = observed.reindex(restored.index)
+        restored["v_1cr_ago"] = recurrent.reindex(restored.index)
+        restored_frames[sat_name] = restored
+
+    return restored_frames
 
 
 def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
@@ -60,108 +149,105 @@ def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
     )
     prepared = prepared[~prepared.index.duplicated(keep="last")].sort_index()
     prepared = prepared.loc[eval_index.min() : eval_index.max()]
-    prepared = prepared.resample(freq).mean()
-    return prepared.reindex(eval_index)
+    return prepared.resample(freq).mean().reindex(eval_index)
 
 
 def prepare_eval_mask(series, eval_index, output_name, freq=SCORE_FREQ):
     mask_source = pd.Series(series)
-    mask_values = mask_source.where(mask_source.notna(), False).astype(bool)
+    mask = mask_source.where(mask_source.notna(), False).astype(bool)
     prepared = pd.Series(
-        mask_values.to_numpy(),
+        mask.to_numpy(),
         index=pd.DatetimeIndex(series.index),
         name=output_name,
     )
     prepared = prepared[~prepared.index.duplicated(keep="last")].sort_index()
     prepared = prepared.loc[eval_index.min() : eval_index.max()]
-    prepared = prepared.resample(freq).max()
-    return prepared.reindex(eval_index, fill_value=False).astype(bool)
+    return prepared.resample(freq).max().reindex(eval_index, fill_value=False)
 
 
-def build_slow_sw_eval_mask(frame, eval_index, time_axis, slow_sw_speed):
-    if "slow_sw_patch_mask" in frame.columns:
-        return prepare_eval_mask(frame["slow_sw_patch_mask"], eval_index, "is_slow_sw")
+def load_sat_icme_windows(sat_name):
+    if sat_name == "ace_earth":
+        return load_icme_windows()
+    if sat_name == "stereo_a":
+        return load_icmecat_windows("STEREO-A")
+    raise ValueError(f"No ICME catalogue configured for satellite: {sat_name}")
 
-    raw_column = "v_predict_raw" if "v_predict_raw" in frame.columns else "v_predict"
-    raw_speed = pd.Series(
-        pd.to_numeric(frame[raw_column], errors="coerce").to_numpy(),
-        index=pd.DatetimeIndex(frame.index),
-        name=raw_column,
+
+def build_sat_score_frame(sat_name, frame, eval_index, freq=SCORE_FREQ):
+    comparison_specs = PAPER_COMPARISONS_BY_SAT[sat_name]
+    if any(
+        spec["comparison"] == "slow_model_vs_swx" for spec in comparison_specs
+    ):
+        assert "slow_sw_patch_mask" in frame.columns, (
+            "The slow_model_vs_swx comparison requires a reproduction built "
+            "with the ACE slow-wind patch enabled"
+        )
+    required_columns = {
+        column
+        for spec in comparison_specs
+        for column in [spec["reference"], spec["candidate"]]
+    }
+    missing_columns = required_columns.difference(frame.columns)
+    assert not missing_columns, (
+        f"Missing paper comparison columns for {sat_name}: "
+        f"{sorted(missing_columns)}"
     )
-    slow_ref = pd.Series(
-        slow_sw_speed,
-        index=pd.DatetimeIndex(time_axis),
-        name="slow_sw_speed",
-    )
-    slow_ref = (
-        slow_ref.reindex(raw_speed.index).interpolate(method="time").ffill().bfill()
-    )
-    is_slow = pd.Series(
-        np.isclose(raw_speed.to_numpy(dtype=float), slow_ref.to_numpy(dtype=float)),
-        index=raw_speed.index,
-        name="is_slow_sw",
-    )
-    return prepare_eval_mask(is_slow, eval_index, "is_slow_sw")
-
-
-def build_sat_score_frame(
-    sat_name,
-    frame,
-    eval_index,
-    icme_mask,
-    time_axis,
-    slow_sw_speed,
-    forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
-):
-    assert "v_real" in frame.columns, f"Missing observed speed column for {sat_name}"
 
     out = pd.DataFrame(index=eval_index)
-    out["obs"] = prepare_eval_series(frame["v_real"], eval_index, "obs")
-    out["phi_target"] = prepare_eval_series(
-        frame["phi_target"], eval_index, "phi_target"
-    )
-    out["is_icme"] = icme_mask.reindex(eval_index, fill_value=False).astype(bool)
-    out["is_slow_sw"] = build_slow_sw_eval_mask(
-        frame=frame,
-        eval_index=eval_index,
-        time_axis=time_axis,
-        slow_sw_speed=slow_sw_speed,
-    )
+    for column in sorted(required_columns):
+        out[column] = prepare_eval_series(
+            frame[column], eval_index, output_name=column, freq=freq
+        )
+    if "slow_sw_patch_mask" in frame.columns:
+        out["slow_sw_patch_mask"] = prepare_eval_mask(
+            frame["slow_sw_patch_mask"],
+            eval_index,
+            output_name="slow_sw_patch_mask",
+            freq=freq,
+        )
 
-    forecast_columns = forecast_columns_by_sat.get(sat_name, DEFAULT_FORECAST_COLUMNS)
-    for forecast_name, column in forecast_columns:
-        if column in frame.columns:
-            out[forecast_name] = prepare_eval_series(
-                frame[column], eval_index, forecast_name
-            )
-
+    out["is_icme"] = build_icme_mask(
+        eval_index,
+        icme_windows=load_sat_icme_windows(sat_name),
+        inclusive_end=False,
+    ).to_numpy()
     return out
+
+
+def build_score_frames(comparison_frames, start_dt, end_dt, freq=SCORE_FREQ):
+    eval_index = build_eval_index(start_dt, end_dt, freq=freq)
+    return {
+        sat_name: build_sat_score_frame(
+            sat_name=sat_name,
+            frame=frame,
+            eval_index=eval_index,
+            freq=freq,
+        )
+        for sat_name, frame in comparison_frames.items()
+    }
 
 
 def build_regime_masks(eval_frame):
     return {
         "all_sw": pd.Series(True, index=eval_frame.index),
-        "no_slow_sw": ~eval_frame["is_slow_sw"],
         "no_icme": ~eval_frame["is_icme"],
-        "no_icme_no_slow_sw": ~eval_frame["is_icme"] & ~eval_frame["is_slow_sw"],
     }
 
 
-def get_regime_order(sat_name):
-    return REGIME_ORDER_BY_SAT.get(sat_name, REGIME_ORDER)
-
-
-def compute_forecast_stats(actual, forecast, sample_mask):
+def compute_comparison_stats(reference, candidate, sample_mask):
+    """Compute metrics with bias defined as candidate minus reference."""
     paired = pd.concat(
         [
-            pd.to_numeric(actual, errors="coerce").rename("actual"),
-            pd.to_numeric(forecast, errors="coerce").rename("forecast"),
+            pd.to_numeric(reference, errors="coerce").rename("reference"),
+            pd.to_numeric(candidate, errors="coerce").rename("candidate"),
             sample_mask.rename("sample_mask"),
         ],
         axis=1,
     )
-    paired = paired.loc[paired["sample_mask"]].dropna(subset=["actual", "forecast"])
-    if len(paired) == 0:
+    paired = paired.loc[paired["sample_mask"]].dropna(
+        subset=["reference", "candidate"]
+    )
+    if paired.empty:
         return {
             "n_samples": 0,
             "r": np.nan,
@@ -170,156 +256,27 @@ def compute_forecast_stats(actual, forecast, sample_mask):
             "bias": np.nan,
         }
 
-    err = paired["forecast"] - paired["actual"]
+    error = paired["candidate"] - paired["reference"]
     r_value = np.nan
     if len(paired) >= 2:
-        actual_std = float(paired["actual"].std())
-        forecast_std = float(paired["forecast"].std())
-        if actual_std > 0.0 and forecast_std > 0.0:
-            r_value = float(paired["actual"].corr(paired["forecast"]))
+        reference_std = float(paired["reference"].std())
+        candidate_std = float(paired["candidate"].std())
+        if reference_std > 0.0 and candidate_std > 0.0:
+            r_value = float(paired["reference"].corr(paired["candidate"]))
 
     return {
         "n_samples": int(len(paired)),
         "r": r_value,
-        "rmse": float(np.sqrt(np.mean(err**2))),
-        "mae": float(np.mean(np.abs(err))),
-        "bias": float(np.mean(err)),
+        "rmse": float(np.sqrt(np.mean(error**2))),
+        "mae": float(np.mean(np.abs(error))),
+        "bias": float(np.mean(error)),
     }
-
-
-def build_score_frames(
-    comparison_frames,
-    start_dt,
-    end_dt,
-    time_axis,
-    slow_sw_speed,
-    freq=SCORE_FREQ,
-    forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
-):
-    eval_index = build_eval_index(start_dt, end_dt, freq=freq)
-    icme_eval_mask = build_icme_mask(eval_index)
-    return {
-        sat_name: build_sat_score_frame(
-            sat_name=sat_name,
-            frame=frame,
-            eval_index=eval_index,
-            icme_mask=icme_eval_mask,
-            time_axis=time_axis,
-            slow_sw_speed=slow_sw_speed,
-            forecast_columns_by_sat=forecast_columns_by_sat,
-        )
-        for sat_name, frame in comparison_frames.items()
-    }
-
-
-def build_forecast_skill_df(
-    score_frames,
-    sat_labels,
-    forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
-):
-    score_rows = []
-    for sat_name, eval_frame in score_frames.items():
-        sat_label = sat_labels.get(sat_name, sat_name)
-        regime_masks = build_regime_masks(eval_frame)
-        for regime in get_regime_order(sat_name):
-            sample_mask = regime_masks[regime]
-            forecast_columns = forecast_columns_by_sat.get(
-                sat_name, DEFAULT_FORECAST_COLUMNS
-            )
-            for forecast_name, _column in forecast_columns:
-                if forecast_name not in eval_frame.columns:
-                    continue
-                score_rows.append(
-                    {
-                        "sat": sat_label,
-                        "regime": regime,
-                        "forecast": forecast_name,
-                        **compute_forecast_stats(
-                            actual=eval_frame["obs"],
-                            forecast=eval_frame[forecast_name],
-                            sample_mask=sample_mask,
-                        ),
-                    }
-                )
-
-    forecast_skill_df = pd.DataFrame(score_rows)
-    if forecast_skill_df.empty:
-        empty = pd.DataFrame(
-            columns=["n_samples", "r", "rmse", "mae", "bias"],
-            index=pd.MultiIndex.from_tuples(
-                [],
-                names=["sat", "regime", "forecast"],
-            ),
-        )
-        return empty
-
-    forecast_skill_df["sat_order"] = forecast_skill_df["sat"].map(
-        {label: order for order, label in enumerate(sat_labels.values())}
-    )
-    forecast_skill_df["regime_order"] = forecast_skill_df["regime"].map(
-        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
-    )
-    forecast_skill_df["forecast_order"] = forecast_skill_df["forecast"].map(
-        FORECAST_ORDER
-    )
-    return (
-        forecast_skill_df.sort_values(
-            ["sat_order", "regime_order", "forecast_order"]
-        )
-        .drop(columns=["sat_order", "regime_order", "forecast_order"])
-        .set_index(["sat", "regime", "forecast"])
-        .round({"r": 3, "rmse": 1, "mae": 1, "bias": 1})
-    )
-
-
-def build_pred_vs_noaa_df(score_frames, sat_labels):
-    pred_vs_noaa_rows = []
-    for sat_name, eval_frame in score_frames.items():
-        if "noaa" not in eval_frame.columns or "pred" not in eval_frame.columns:
-            continue
-        sat_label = sat_labels.get(sat_name, sat_name)
-        regime_masks = build_regime_masks(eval_frame)
-        for regime in get_regime_order(sat_name):
-            pred_vs_noaa_rows.append(
-                {
-                    "sat": sat_label,
-                    "regime": regime,
-                    **compute_forecast_stats(
-                        actual=eval_frame["noaa"],
-                        forecast=eval_frame["pred"],
-                        sample_mask=regime_masks[regime],
-                    ),
-                }
-            )
-
-    pred_vs_noaa_df = pd.DataFrame(pred_vs_noaa_rows)
-    if pred_vs_noaa_df.empty:
-        empty = pd.DataFrame(
-            columns=["n_samples", "r", "rmse", "mae", "bias"],
-            index=pd.MultiIndex.from_tuples([], names=["sat", "regime"]),
-        )
-        return empty
-
-    pred_vs_noaa_df["sat_order"] = pred_vs_noaa_df["sat"].map(
-        {label: order for order, label in enumerate(sat_labels.values())}
-    )
-    pred_vs_noaa_df["regime_order"] = pred_vs_noaa_df["regime"].map(
-        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
-    )
-    return (
-        pred_vs_noaa_df.sort_values(["sat_order", "regime_order"])
-        .drop(columns=["sat_order", "regime_order"])
-        .set_index(["sat", "regime"])
-        .round({"r": 3, "rmse": 1, "mae": 1, "bias": 1})
-    )
 
 
 def build_sw_forecast_stats(
     comparison_frames,
     start_dt,
     end_dt,
-    time_axis,
-    slow_sw_speed,
     sat_labels,
     freq=SCORE_FREQ,
 ):
@@ -327,44 +284,52 @@ def build_sw_forecast_stats(
         comparison_frames=comparison_frames,
         start_dt=start_dt,
         end_dt=end_dt,
-        time_axis=time_axis,
-        slow_sw_speed=slow_sw_speed,
         freq=freq,
     )
-    return {
-        "forecast_skill": build_forecast_skill_df(
-            score_frames=score_frames,
-            sat_labels=sat_labels,
-        ),
-        "pred_vs_noaa": build_pred_vs_noaa_df(
-            score_frames=score_frames,
-            sat_labels=sat_labels,
-        ),
-    }
+    rows = []
+    for sat_name, eval_frame in score_frames.items():
+        regime_masks = build_regime_masks(eval_frame)
+        for spec in PAPER_COMPARISONS_BY_SAT[sat_name]:
+            for regime in spec["regimes"]:
+                rows.append(
+                    {
+                        "sat": sat_labels.get(sat_name, sat_name),
+                        "comparison": spec["comparison"],
+                        "regime": regime,
+                        "reference": spec["reference"],
+                        "candidate": spec["candidate"],
+                        **compute_comparison_stats(
+                            reference=eval_frame[spec["reference"]],
+                            candidate=eval_frame[spec["candidate"]],
+                            sample_mask=regime_masks[regime],
+                        ),
+                    }
+                )
 
-
-def build_sw_forecast_stats_csv_frame(stats_tables):
-    forecast_skill_df = stats_tables["forecast_skill"].reset_index()
-    forecast_skill_df.insert(0, "table", "forecast_skill")
-
-    pred_vs_noaa_df = stats_tables["pred_vs_noaa"].reset_index()
-    if not pred_vs_noaa_df.empty:
-        pred_vs_noaa_df.insert(0, "table", "pred_vs_noaa")
-        pred_vs_noaa_df.insert(3, "forecast", "pred_vs_noaa")
-
-    csv_frames = [forecast_skill_df]
-    if not pred_vs_noaa_df.empty:
-        csv_frames.append(pred_vs_noaa_df)
-    return pd.concat(csv_frames, ignore_index=True)
+    stats = pd.DataFrame(rows)
+    stats["sat_order"] = stats["sat"].map(
+        {label: order for order, label in enumerate(sat_labels.values())}
+    )
+    stats["comparison_order"] = stats["comparison"].map(
+        {name: order for order, name in enumerate(COMPARISON_ORDER)}
+    )
+    stats["regime_order"] = stats["regime"].map(
+        {name: order for order, name in enumerate(REGIME_ORDER)}
+    )
+    return (
+        stats.sort_values(["sat_order", "comparison_order", "regime_order"])
+        .drop(columns=["sat_order", "comparison_order", "regime_order"])
+        .reset_index(drop=True)
+        .round({"r": 3, "rmse": 1, "mae": 1, "bias": 1})
+    )
 
 
 def export_sw_forecast_stats_csv(csv_outfile, **stats_kwargs):
     output_path = Path(csv_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    stats_tables = build_sw_forecast_stats(**stats_kwargs)
-    csv_frame = build_sw_forecast_stats_csv_frame(stats_tables)
-    csv_frame.to_csv(output_path, index=False)
-    return stats_tables, csv_frame
+    stats = build_sw_forecast_stats(**stats_kwargs)
+    stats.to_csv(output_path, index=False)
+    return stats
 
 
 def build_cr_windows(start_dt, end_dt):
@@ -378,13 +343,7 @@ def build_cr_windows(start_dt, end_dt):
         cr_start = max(start, full_cr_start)
         cr_end = min(end, full_cr_end)
         if cr_start < cr_end:
-            rows.append(
-                {
-                    "cr": int(cr),
-                    "cr_start": cr_start,
-                    "cr_end": cr_end,
-                }
-            )
+            rows.append({"cr": cr, "cr_start": cr_start, "cr_end": cr_end})
         if full_cr_end >= end:
             break
         cr += 1
@@ -396,90 +355,10 @@ def build_cr_sample_mask(eval_frame, cr_start, cr_end):
     return pd.Series(mask, index=eval_frame.index)
 
 
-def build_forecast_skill_cr_df(
-    score_frames,
-    sat_labels,
-    cr_windows,
-    forecast_columns_by_sat=FORECAST_COLUMNS_BY_SAT,
-):
-    rows = []
-    for cr_window in cr_windows.itertuples(index=False):
-        for sat_name, eval_frame in score_frames.items():
-            sat_label = sat_labels.get(sat_name, sat_name)
-            cr_mask = build_cr_sample_mask(
-                eval_frame=eval_frame,
-                cr_start=cr_window.cr_start,
-                cr_end=cr_window.cr_end,
-            )
-            regime_masks = build_regime_masks(eval_frame)
-            forecast_columns = forecast_columns_by_sat.get(
-                sat_name, DEFAULT_FORECAST_COLUMNS
-            )
-            for regime in get_regime_order(sat_name):
-                sample_mask = cr_mask & regime_masks[regime]
-                for forecast_name, _column in forecast_columns:
-                    if forecast_name not in eval_frame.columns:
-                        continue
-                    rows.append(
-                        {
-                            "table": "forecast_skill",
-                            "cr": cr_window.cr,
-                            "cr_start": cr_window.cr_start,
-                            "cr_end": cr_window.cr_end,
-                            "sat": sat_label,
-                            "regime": regime,
-                            "forecast": forecast_name,
-                            **compute_forecast_stats(
-                                actual=eval_frame["obs"],
-                                forecast=eval_frame[forecast_name],
-                                sample_mask=sample_mask,
-                            ),
-                        }
-                    )
-
-    return pd.DataFrame(rows)
-
-
-def build_pred_vs_noaa_cr_df(score_frames, sat_labels, cr_windows):
-    rows = []
-    for cr_window in cr_windows.itertuples(index=False):
-        for sat_name, eval_frame in score_frames.items():
-            if "noaa" not in eval_frame.columns or "pred" not in eval_frame.columns:
-                continue
-            sat_label = sat_labels.get(sat_name, sat_name)
-            cr_mask = build_cr_sample_mask(
-                eval_frame=eval_frame,
-                cr_start=cr_window.cr_start,
-                cr_end=cr_window.cr_end,
-            )
-            regime_masks = build_regime_masks(eval_frame)
-            for regime in get_regime_order(sat_name):
-                rows.append(
-                    {
-                        "table": "pred_vs_noaa",
-                        "cr": cr_window.cr,
-                        "cr_start": cr_window.cr_start,
-                        "cr_end": cr_window.cr_end,
-                        "sat": sat_label,
-                        "regime": regime,
-                        "forecast": "pred_vs_noaa",
-                        **compute_forecast_stats(
-                            actual=eval_frame["noaa"],
-                            forecast=eval_frame["pred"],
-                            sample_mask=cr_mask & regime_masks[regime],
-                        ),
-                    }
-                )
-
-    return pd.DataFrame(rows)
-
-
 def build_sw_forecast_cr_stats_csv_frame(
     comparison_frames,
     start_dt,
     end_dt,
-    time_axis,
-    slow_sw_speed,
     sat_labels,
     freq=SCORE_FREQ,
 ):
@@ -487,67 +366,54 @@ def build_sw_forecast_cr_stats_csv_frame(
         comparison_frames=comparison_frames,
         start_dt=start_dt,
         end_dt=end_dt,
-        time_axis=time_axis,
-        slow_sw_speed=slow_sw_speed,
         freq=freq,
     )
     cr_windows = build_cr_windows(start_dt=start_dt, end_dt=end_dt)
-    cr_csv_frames = [
-        build_forecast_skill_cr_df(
-            score_frames=score_frames,
-            sat_labels=sat_labels,
-            cr_windows=cr_windows,
-        ),
-        build_pred_vs_noaa_cr_df(
-            score_frames=score_frames,
-            sat_labels=sat_labels,
-            cr_windows=cr_windows,
-        ),
-    ]
-    cr_csv_frames = [frame for frame in cr_csv_frames if not frame.empty]
-    cr_stats = (
-        pd.concat(cr_csv_frames, ignore_index=True)
-        if cr_csv_frames
-        else pd.DataFrame()
-    )
-    if cr_stats.empty:
-        return pd.DataFrame(
-            columns=[
-                "table",
-                "cr",
-                "cr_start",
-                "cr_end",
-                "sat",
-                "regime",
-                "forecast",
-                "n_samples",
-                "r",
-                "rmse",
-                "mae",
-                "bias",
-            ]
-        )
+    rows = []
+    for cr_window in cr_windows.itertuples(index=False):
+        for sat_name, eval_frame in score_frames.items():
+            cr_mask = build_cr_sample_mask(
+                eval_frame=eval_frame,
+                cr_start=cr_window.cr_start,
+                cr_end=cr_window.cr_end,
+            )
+            regime_masks = build_regime_masks(eval_frame)
+            for spec in PAPER_COMPARISONS_BY_SAT[sat_name]:
+                for regime in spec["regimes"]:
+                    rows.append(
+                        {
+                            "cr": cr_window.cr,
+                            "cr_start": cr_window.cr_start,
+                            "cr_end": cr_window.cr_end,
+                            "sat": sat_labels.get(sat_name, sat_name),
+                            "comparison": spec["comparison"],
+                            "regime": regime,
+                            "reference": spec["reference"],
+                            "candidate": spec["candidate"],
+                            **compute_comparison_stats(
+                                reference=eval_frame[spec["reference"]],
+                                candidate=eval_frame[spec["candidate"]],
+                                sample_mask=cr_mask & regime_masks[regime],
+                            ),
+                        }
+                    )
 
-    cr_stats["sat_order"] = cr_stats["sat"].map(
+    stats = pd.DataFrame(rows)
+    stats["sat_order"] = stats["sat"].map(
         {label: order for order, label in enumerate(sat_labels.values())}
     )
-    cr_stats["regime_order"] = cr_stats["regime"].map(
-        {regime: order for order, regime in enumerate(REGIME_SORT_ORDER)}
+    stats["comparison_order"] = stats["comparison"].map(
+        {name: order for order, name in enumerate(COMPARISON_ORDER)}
     )
-    cr_stats["forecast_order"] = cr_stats["forecast"].map(
-        {**FORECAST_ORDER, "pred_vs_noaa": len(FORECAST_ORDER)}
+    stats["regime_order"] = stats["regime"].map(
+        {name: order for order, name in enumerate(REGIME_ORDER)}
     )
     return (
-        cr_stats.sort_values(
-            [
-                "cr",
-                "table",
-                "sat_order",
-                "regime_order",
-                "forecast_order",
-            ]
+        stats.sort_values(
+            ["cr", "sat_order", "comparison_order", "regime_order"]
         )
-        .drop(columns=["sat_order", "regime_order", "forecast_order"])
+        .drop(columns=["sat_order", "comparison_order", "regime_order"])
+        .reset_index(drop=True)
         .round({"r": 3, "rmse": 1, "mae": 1, "bias": 1})
     )
 
@@ -555,6 +421,133 @@ def build_sw_forecast_cr_stats_csv_frame(
 def export_sw_forecast_cr_stats_csv(csv_outfile, **stats_kwargs):
     output_path = Path(csv_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    csv_frame = build_sw_forecast_cr_stats_csv_frame(**stats_kwargs)
-    csv_frame.to_csv(output_path, index=False)
-    return csv_frame
+    stats = build_sw_forecast_cr_stats_csv_frame(**stats_kwargs)
+    stats.to_csv(output_path, index=False)
+    return stats
+
+
+def build_icme_duration_by_cr(cr_stats, events, sat):
+    """Measure physical ICME occupancy in each CR without double-counting."""
+    sat_stats = cr_stats.loc[cr_stats["sat"] == sat].copy()
+    assert not sat_stats.empty, f"No per-rotation statistics found for sat={sat!r}"
+    cr_windows = sat_stats[["cr", "cr_start", "cr_end"]].drop_duplicates()
+    assert not cr_windows["cr"].duplicated().any(), (
+        f"Multiple time windows found for one Carrington rotation at sat={sat!r}"
+    )
+    cr_windows["cr"] = pd.to_numeric(cr_windows["cr"], errors="coerce")
+    cr_windows["cr_start"] = pd.to_datetime(cr_windows["cr_start"])
+    cr_windows["cr_end"] = pd.to_datetime(cr_windows["cr_end"])
+    cr_windows = cr_windows.dropna().sort_values("cr")
+
+    sat_events = events.loc[events["sat"] == sat].copy()
+    sat_events["event_start"] = pd.to_datetime(sat_events["event_start"])
+    sat_events["event_end"] = pd.to_datetime(sat_events["event_end"])
+    sat_events = sat_events.dropna(subset=["event_start", "event_end"])
+
+    rows = []
+    for cr_window in cr_windows.itertuples(index=False):
+        clipped_intervals = []
+        for event in sat_events.itertuples(index=False):
+            overlap_start = max(cr_window.cr_start, event.event_start)
+            overlap_end = min(cr_window.cr_end, event.event_end)
+            if overlap_start < overlap_end:
+                clipped_intervals.append((overlap_start, overlap_end))
+
+        merged_intervals = []
+        for interval_start, interval_end in sorted(clipped_intervals):
+            if merged_intervals and interval_start <= merged_intervals[-1][1]:
+                previous_start, previous_end = merged_intervals[-1]
+                merged_intervals[-1] = (
+                    previous_start,
+                    max(previous_end, interval_end),
+                )
+            else:
+                merged_intervals.append((interval_start, interval_end))
+
+        rows.append(
+            {
+                "cr": cr_window.cr,
+                "cr_start": cr_window.cr_start,
+                "cr_end": cr_window.cr_end,
+                "icme_duration_hours": sum(
+                    (interval_end - interval_start) / pd.Timedelta(hours=1)
+                    for interval_start, interval_end in merged_intervals
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_icme_event_df(start_dt, end_dt, sat_labels):
+    """Build event-level ICME context, with Dst populated only at ACE/Earth."""
+    start = pd.Timestamp(start_dt)
+    end = pd.Timestamp(end_dt)
+    output_columns = [
+        "event_id",
+        "catalog",
+        "sat",
+        "event_start",
+        "mo_start",
+        "event_end",
+        "exclusion_end",
+        "event_midpoint",
+        "event_cr",
+        "icme_duration_hours",
+        "dst_min",
+    ]
+
+    rows = []
+    for sat_name in ["ace_earth", "stereo_a"]:
+        icme_windows = load_sat_icme_windows(sat_name)
+        overlapping_icmes = icme_windows.loc[
+            (icme_windows["start"] < end) & (icme_windows["end"] > start)
+        ]
+        for event in overlapping_icmes.itertuples(index=False):
+            event_start = pd.Timestamp(event.start)
+            event_end = pd.Timestamp(event.end)
+            event_midpoint = event_start + (event_end - event_start) / 2
+            if sat_name == "ace_earth":
+                event_id = f"earth_{event_start:%Y%m%d_%H%M}"
+                mo_start = pd.Timestamp(event.T_start)
+                dst_min = pd.to_numeric(event.dst_min_omni_body, errors="coerce")
+                catalog = "unified_earth"
+            else:
+                event_id = event.icmecat_id
+                mo_start = pd.Timestamp(event.mo_start_time)
+                dst_min = np.nan
+                catalog = "icmecat_v2.3"
+
+            rows.append(
+                {
+                    "event_id": event_id,
+                    "catalog": catalog,
+                    "sat": sat_labels.get(sat_name, sat_name),
+                    "event_start": event_start,
+                    "mo_start": mo_start,
+                    "event_end": event_end,
+                    "exclusion_end": (
+                        event_end + DEFAULT_POST_ICME_BODY_END_TOLERANCE
+                    ),
+                    "event_midpoint": event_midpoint,
+                    "event_cr": float(carrington_rotation_number(event_midpoint)),
+                    "icme_duration_hours": (
+                        event_end - event_start
+                    ) / pd.Timedelta(hours=1),
+                    "dst_min": dst_min,
+                }
+            )
+
+    return (
+        pd.DataFrame(rows, columns=output_columns)
+        .sort_values(["sat", "event_start"])
+        .reset_index(drop=True)
+    )
+
+
+def export_icme_event_csv(csv_outfile, **event_kwargs):
+    output_path = Path(csv_outfile)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    events = build_icme_event_df(**event_kwargs)
+    events.to_csv(output_path, index=False)
+    return events
