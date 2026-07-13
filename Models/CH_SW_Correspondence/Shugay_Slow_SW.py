@@ -5,6 +5,7 @@ import pandas as pd
 
 from Library.Paths import data_path, resolve_repo_path
 from Library.SW.CH_SW_Model import EmpiricalCHSWModel
+from Library.SW.Constants import SW_MODEL_V2_HANDOFF
 
 ACE_PATH = data_path("ACE At Earth 1h.parquet")
 
@@ -55,6 +56,9 @@ MODEL = EmpiricalCHSWModel(
     v_min=shugay_slow_sw_vmin_factory(load_ace_speed_series()),
     a=180.0,
     alpha=0.6,
+    a_before_handoff=210.0,
+    alpha_before_handoff=0.4,
+    parameter_handoff=SW_MODEL_V2_HANDOFF,
 )
 
 

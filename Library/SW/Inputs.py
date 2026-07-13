@@ -6,6 +6,7 @@ import psycopg
 
 import userpwd
 from Library.Paths import data_path, resolve_repo_path
+from Library.SW.Constants import SW_MODEL_V2_HANDOFF
 
 DEFAULT_SQL_QUERY = """
 SELECT
@@ -25,7 +26,6 @@ WHERE f.forecast_dt BETWEEN %(start_dt)s AND %(end_dt)s
 ORDER BY f.forecast_dt, f.dt;
 """
 
-SDO_V2_HANDOFF = "2019-01-01"
 DEFAULT_SQL_CONNECTION = {
     "host": "213.131.1.41",
     "user": "selector",
@@ -88,7 +88,9 @@ def load_sw_input_from_sql(
         with conn.cursor() as cur:
             for chunk_start, chunk_end in iter_year_windows(start_dt, end_dt):
                 sdo_prefix = (
-                    "sdo" if chunk_start < pd.Timestamp(SDO_V2_HANDOFF) else "sdo_v2"
+                    "sdo"
+                    if chunk_start < pd.Timestamp(SW_MODEL_V2_HANDOFF)
+                    else "sdo_v2"
                 )
                 chunk_query = query if query is not None else DEFAULT_SQL_QUERY
                 chunk_query = chunk_query.replace("SDO_PREFIX", sdo_prefix)
@@ -344,9 +346,18 @@ def build_model_input_series(
     ), "No valid SW input rows remain after filtering and CH-area normalization"
 
     launch_time = (prepared_input["dt"] + pd.Timedelta(minutes=30)).dt.floor("1h")
+    if "forecast_dt" in prepared_input.columns:
+        parameter_time = pd.to_datetime(prepared_input["forecast_dt"])
+        assert parameter_time.notna().all(), (
+            "Expected forecast_dt to be populated when selecting time-dependent "
+            "CH-SW parameters"
+        )
+    else:
+        parameter_time = launch_time
     prepared_input["v_empirical"] = empirical.v_from_area(
         prepared_input["ch_relative_area"].to_numpy(dtype=float),
         t=launch_time,
+        parameter_time=parameter_time,
     )
     df_v = (
         pd.DataFrame({"time": launch_time, "v": prepared_input["v_empirical"]})
