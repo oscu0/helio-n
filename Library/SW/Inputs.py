@@ -35,6 +35,9 @@ DEFAULT_SQL_CONNECTION = {
 DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
 DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
 DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A PLASTIC.parquet")
+# 5,087 native forecast_dt/forecast_sw_speed points from
+# sdo.sdo_sw_forecast_0193p over [2018-01-01, 2019-01-01), without interpolation.
+DEFAULT_SWX_PARQUET_PATH = data_path("SWX Forecast 2018.parquet")
 DEFAULT_ENLIL_PARQUET_PATH = data_path("ENLIL 2018-02-01 2018-07-01.parquet")
 DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
@@ -224,6 +227,16 @@ def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
         sat=DEFAULT_ACE_EARTH_SAT,
         label=DEFAULT_ACE_EARTH_LABEL,
     )
+
+
+def load_ace_swx_frame(swx_path=DEFAULT_SWX_PARQUET_PATH):
+    frame = load_cached_satellite_frame(
+        swx_path,
+        sat=DEFAULT_ACE_EARTH_SAT,
+        label=DEFAULT_ACE_EARTH_LABEL,
+    )
+    assert "v_swx" in frame.columns, f"Missing v_swx column in {swx_path}"
+    return frame
 
 
 def load_stereo_a_frame(

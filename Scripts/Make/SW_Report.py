@@ -11,7 +11,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from Library.SW.Report import build_hourly_report_frame, write_report  # noqa: E402
-from Library.SW.Stats import restore_observed_and_recurrent_series  # noqa: E402
+from Library.SW.Stats import (  # noqa: E402
+    restore_observed_and_recurrent_series,
+    restore_swx_series,
+)
 
 
 def parse_args(argv):
@@ -42,6 +45,14 @@ def parse_args(argv):
         "--report-out",
         default=None,
         help="Optional explicit Excel output path.",
+    )
+    parser.add_argument(
+        "--swx-parquet",
+        default=None,
+        help=(
+            "Optional native SWX parquet used to replace a gap-filled SWX "
+            "series in an older reproduction."
+        ),
     )
     return parser.parse_args(argv[1:])
 
@@ -88,6 +99,11 @@ def main(argv):
         end_dt=end_dt,
         freq=args.freq,
     )
+    if args.swx_parquet is not None:
+        comparison_frames = restore_swx_series(
+            comparison_frames,
+            swx_path=args.swx_parquet,
+        )
 
     report_frame = build_hourly_report_frame(
         reproduction_frame=reproduction_frame,

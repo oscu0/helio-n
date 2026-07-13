@@ -312,7 +312,7 @@ def export_solar_wind_plot(
 
 
 def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
-    """Plot one spacecraft, selected by its exact value in the ``sat`` column."""
+    """Plot per-CR correlations, ICME duration, and Earth-only Dst context."""
     labels = {
         "raw_vs_observed": "Raw model",
         "recurrent_vs_observed": "Recurrent forecast",
@@ -389,6 +389,28 @@ def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
         duration_data["cr"].max() + 0.5,
     )
     event_axis.grid(alpha=0.25)
+
+    sat_events = events.loc[events["sat"] == sat].copy()
+    sat_events["event_cr"] = pd.to_numeric(
+        sat_events["event_cr"], errors="coerce"
+    )
+    sat_events["dst_min"] = pd.to_numeric(
+        sat_events["dst_min"], errors="coerce"
+    )
+    dst_events = sat_events.dropna(subset=["event_cr", "dst_min"])
+    if not dst_events.empty:
+        dst_axis = event_axis.twinx()
+        dst_axis.scatter(
+            dst_events["event_cr"],
+            dst_events["dst_min"],
+            color="tab:purple",
+            marker="v",
+            s=24,
+            zorder=4,
+        )
+        dst_axis.set_ylabel("Minimum Dst per ICME (nT)", color="tab:purple")
+        dst_axis.tick_params(axis="y", colors="tab:purple")
+        dst_axis.axhline(0.0, color="tab:purple", linewidth=0.7, alpha=0.4)
 
     return fig
 

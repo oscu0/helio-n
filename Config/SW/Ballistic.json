@@ -1,6 +1,6 @@
 {
     "superresolution_enabled": true,
-    "superresolution_step_minutes": 2.5,
+    "superresolution_step_minutes": 2,
     "base_time_step_minutes": 60,
     "phi_step_minutes": 120,
     "r0": 20,

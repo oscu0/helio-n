@@ -11,9 +11,14 @@ from Library.ICME import (
     load_icme_windows,
 )
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
-from Library.SW.Inputs import load_ace_earth_frame, load_stereo_a_frame
+from Library.SW.Inputs import (
+    load_ace_earth_frame,
+    load_ace_swx_frame,
+    load_stereo_a_frame,
+)
 
 SCORE_FREQ = "1h"
+RECURRENT_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
 REGIME_ORDER = ["all_sw", "no_icme"]
 COMPARISON_ORDER = [
     "raw_vs_observed",
@@ -62,9 +67,9 @@ def build_recurrent_series(
     observed_series,
     target_index,
     cr_days=CARRINGTON_ROTATION_DAYS,
-    max_source_gap=SCORE_FREQ,
+    max_source_gap=RECURRENT_MAX_SOURCE_GAP,
 ):
-    """Shift observations by one rotation without bridging source-data gaps."""
+    """Shift observations by one rotation, bridging only short source-data gaps."""
     source = pd.Series(
         pd.to_numeric(observed_series, errors="coerce").to_numpy(),
         index=pd.DatetimeIndex(observed_series.index),
@@ -130,7 +135,6 @@ def restore_observed_and_recurrent_series(
         recurrent = build_recurrent_series(
             observed_series=observed_frame["v"],
             target_index=eval_index,
-            max_source_gap=freq,
         )
 
         restored = frame.copy()
@@ -141,6 +145,27 @@ def restore_observed_and_recurrent_series(
     return restored_frames
 
 
+def restore_swx_series(comparison_frames, swx_path=None):
+    """Replace the old gap-filled SWX series with the frozen native forecast."""
+    restored_frames = {
+        sat_name: frame.copy() for sat_name, frame in comparison_frames.items()
+    }
+    assert "ace_earth" in restored_frames, "Missing ACE/Earth comparison frame"
+
+    ace_frame = restored_frames["ace_earth"]
+    if "v_swx" in ace_frame.columns:
+        ace_frame = ace_frame.drop(columns="v_swx")
+    swx_frame = (
+        load_ace_swx_frame()
+        if swx_path is None
+        else load_ace_swx_frame(swx_path)
+    )
+    restored_frames["ace_earth"] = ace_frame.join(
+        swx_frame[["v_swx"]], how="outer"
+    ).sort_index()
+    return restored_frames
+
+
 def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
     prepared = pd.Series(
         pd.to_numeric(series, errors="coerce").to_numpy(),
@@ -148,7 +173,6 @@ def prepare_eval_series(series, eval_index, output_name, freq=SCORE_FREQ):
         name=output_name,
     )
     prepared = prepared[~prepared.index.duplicated(keep="last")].sort_index()
-    prepared = prepared.loc[eval_index.min() : eval_index.max()]
     return prepared.resample(freq).mean().reindex(eval_index)
 
 
@@ -161,7 +185,6 @@ def prepare_eval_mask(series, eval_index, output_name, freq=SCORE_FREQ):
         name=output_name,
     )
     prepared = prepared[~prepared.index.duplicated(keep="last")].sort_index()
-    prepared = prepared.loc[eval_index.min() : eval_index.max()]
     return prepared.resample(freq).max().reindex(eval_index, fill_value=False)
 
 
@@ -210,6 +233,7 @@ def build_sat_score_frame(sat_name, frame, eval_index, freq=SCORE_FREQ):
         eval_index,
         icme_windows=load_sat_icme_windows(sat_name),
         inclusive_end=False,
+        sample_width=pd.Timedelta(freq),
     ).to_numpy()
     return out
 

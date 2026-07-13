@@ -73,10 +73,16 @@ def build_icme_mask(
     icme_csv_path=DEFAULT_ICME_CSV_PATH,
     post_body_end_tolerance=DEFAULT_POST_ICME_BODY_END_TOLERANCE,
     inclusive_end=True,
+    sample_width=None,
 ):
-    """Return a boolean mask marking timestamps inside ICME intervals plus end tolerance."""
+    """Mark timestamps or time bins overlapping ICME intervals plus end tolerance."""
     timestamps = pd.to_datetime(pd.Index(times))
     mask = pd.Series(False, index=timestamps)
+    sample_end = (
+        timestamps + pd.Timedelta(sample_width)
+        if sample_width is not None
+        else None
+    )
     if post_body_end_tolerance is None:
         post_body_end_tolerance = pd.Timedelta(0)
     else:
@@ -100,7 +106,9 @@ def build_icme_mask(
     windows["end"] = pd.to_datetime(windows["end"]) + post_body_end_tolerance
 
     for row in windows.itertuples(index=False):
-        if inclusive_end:
+        if sample_end is not None:
+            mask |= (timestamps < row.end) & (sample_end > row.start)
+        elif inclusive_end:
             mask |= (timestamps >= row.start) & (timestamps <= row.end)
         else:
             mask |= (timestamps >= row.start) & (timestamps < row.end)
