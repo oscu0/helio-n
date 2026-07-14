@@ -60,7 +60,13 @@ def build_satellite_comparison_frame(
     draw_slow_sw=True,
     slow_sw_speed=None,
     slow_sw_patch=True,
+    prediction_time_offset_steps=0,
 ):
+    prediction_time_offset_steps = int(prediction_time_offset_steps)
+    assert (
+        prediction_time_offset_steps >= 0
+    ), "prediction_time_offset_steps must be non-negative"
+
     target_frame = pd.DataFrame(index=pd.DatetimeIndex(time_axis))
     if df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
         target_frame = target_frame.join(df_sat[["phi_target", "r_target"]], how="left")
@@ -86,12 +92,18 @@ def build_satellite_comparison_frame(
         if not (np.isfinite(phi_value) and np.isfinite(r_value)):
             continue
 
+        prediction_time_idx = time_idx + prediction_time_offset_steps
+        if prediction_time_idx >= len(time_axis):
+            continue
+
         phi_idx = find_phi_index(phi_axis, phi_value)
         r_idx = find_axis_index(r_axis, target=r_value)
-        raw_value = float(grid_raw[time_idx, phi_idx, r_idx])
+        raw_value = float(grid_raw[prediction_time_idx, phi_idx, r_idx])
         v_predict_raw[time_idx] = raw_value
 
-        is_slow_sw = bool(slow_sw_pred_mask[time_idx, phi_idx, r_idx])
+        is_slow_sw = bool(
+            slow_sw_pred_mask[prediction_time_idx, phi_idx, r_idx]
+        )
         slow_sw_target_mask[time_idx] = is_slow_sw
 
         model_value = raw_value

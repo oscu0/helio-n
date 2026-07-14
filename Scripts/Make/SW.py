@@ -23,6 +23,7 @@ from Library.SW.Config import (  # noqa: E402
     load_slow_sw_patch_spec,
     load_sw_runtime_spec,
 )
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS  # noqa: E402
 from Library.SW.Coords import (  # noqa: E402
     build_grid_axes,
     build_transport_state,
@@ -123,6 +124,15 @@ def parse_args(argv):
             "Default: use the raw constant-filled prediction."
         ),
     )
+    parser.add_argument(
+        "--stereo-next-cr",
+        action="store_true",
+        help=(
+            "Use the following Carrington rotation's CH input for the "
+            "STEREO-A comparison. Default: use the wrapped "
+            "previous-rotation branch."
+        ),
+    )
     return parser.parse_args(argv[1:])
 
 
@@ -134,6 +144,9 @@ def main(argv):
         f"Expected start datetime before end datetime; got start={start_dt} "
         f"and end={end_dt}"
     )
+    input_end_dt = end_dt
+    if args.stereo_next_cr:
+        input_end_dt += pd.Timedelta(days=CARRINGTON_ROTATION_DAYS)
 
     empirical = load_empirical_spec()
     slow_sw_patch_empirical = load_slow_sw_patch_spec()
@@ -168,7 +181,7 @@ def main(argv):
     )
     df_sdo_sw = load_sw_input_frame(
         start_dt=start_dt,
-        end_dt=end_dt,
+        end_dt=input_end_dt,
         source=args.input_source,
         input_parquet_path=resolve_repo_path(args.input_parquet),
     )
@@ -201,6 +214,28 @@ def main(argv):
         horizon_hours=ballistic["horizon_hours"],
         time_step_hours=time_step_hours,
     )
+    if args.stereo_next_cr:
+        requested_time_axis = pd.date_range(
+            start_dt,
+            end_dt,
+            freq=time_freq,
+            inclusive="left",
+        )
+        required_grid_end = requested_time_axis[-1] + pd.Timedelta(
+            minutes=time_step_minutes * transport.cr_steps
+        )
+        assert grid.time_axis.max() >= required_grid_end, (
+            "The propagated grid does not cover the full STEREO next-CR "
+            f"comparison interval: required through {required_grid_end}, "
+            f"available through {grid.time_axis.max()}"
+        )
+        print(
+            "STEREO CH source: next Carrington rotation",
+            "| grid offset steps:",
+            transport.cr_steps,
+            "| input end:",
+            input_end_dt,
+        )
 
     df_v_run = (
         prepared["df_v"]
@@ -339,6 +374,11 @@ def main(argv):
             slow_sw_speed=slow_sw_patch_speed,
             slow_sw_patch=args.slow_sw,
             draw_slow_sw=True,
+            prediction_time_offset_steps=(
+                transport.cr_steps
+                if args.stereo_next_cr and sat_name == "stereo_a"
+                else 0
+            ),
         )
     satellite_frame_window = pd.concat(
         {

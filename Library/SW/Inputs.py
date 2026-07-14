@@ -22,7 +22,8 @@ LEFT JOIN SDO_PREFIX.sdo_fill_sw_193(
   %(end_dt)s
 ) AS c
   ON c.dt = f.dt
-WHERE f.forecast_dt BETWEEN %(start_dt)s AND %(end_dt)s
+WHERE f.forecast_dt >= %(start_dt)s
+  AND f.forecast_dt < %(end_dt)s
 ORDER BY f.forecast_dt, f.dt;
 """
 
