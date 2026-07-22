@@ -8,7 +8,7 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
-from Library.SW.Stats import build_icme_duration_by_cr, build_recurrent_series
+from Library.SW.Stats import build_recurrent_series
 
 PREDICT_COLUMN = "v_predict"
 PREDICT_RAW_COLUMN = "v_predict_raw"
@@ -324,9 +324,9 @@ def export_solar_wind_plot(
 
 
 def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
-    """Plot per-CR correlations, ICME duration, and Earth-only Dst context."""
+    """Plot per-CR correlations."""
     labels = {
-        "raw_vs_observed": "Raw model",
+        "raw_vs_observed": "SWX-2D",
         "recurrent_vs_observed": "Recurrent forecast",
     }
     if comparison_labels is not None:
@@ -337,21 +337,17 @@ def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
         "recurrent_vs_observed": "tab:blue",
     }
     regime_styles = {
-        "all_sw": ("-", "o", "All solar wind"),
-        "no_icme": ("--", "s", "ICME excluded"),
+        "all_sw": ("-", "o", "all data"),
+        "no_icme": ("--", "s", "ICMEs excluded"),
     }
     sat_stats = cr_stats.loc[cr_stats["sat"] == sat].copy()
     assert not sat_stats.empty, f"No per-rotation statistics found for sat={sat!r}"
     sat_stats["cr"] = pd.to_numeric(sat_stats["cr"], errors="coerce")
     sat_stats["r"] = pd.to_numeric(sat_stats["r"], errors="coerce")
 
-    fig, (correlation_axis, event_axis) = plt.subplots(
-        2,
-        1,
-        figsize=(10.0, 6.3),
-        sharex=True,
+    fig, correlation_axis = plt.subplots(
+        figsize=(10.0, 4.2),
         constrained_layout=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0]},
     )
 
     for comparison, color in comparison_styles.items():
@@ -368,61 +364,26 @@ def plot_cr_icme_figure(cr_stats, events, sat, comparison_labels=None):
                 color=color,
                 linestyle=linestyle,
                 marker=marker,
-                markersize=4.5,
-                linewidth=1.4,
+                markersize=6.0,
+                linewidth=1.8,
                 label=f"{labels[comparison]}, {regime_label}",
             )
 
     correlation_axis.axhline(0.0, color="0.5", linewidth=0.8)
     correlation_axis.set_ylim(-1.0, 1.0)
-    correlation_axis.set_ylabel("Pearson correlation, r")
-    correlation_axis.set_title(sat, loc="left")
+    correlation_axis.set_ylabel("Pearson correlation coefficient, $r$", fontsize=16)
+    correlation_axis.set_xlabel("Carrington rotation", fontsize=16)
+    correlation_axis.set_title(sat.replace(" @ ", " at "), loc="left", fontsize=17)
+    correlation_axis.tick_params(
+        axis="both",
+        which="both",
+        direction="in",
+        top=True,
+        right=True,
+        labelsize=13,
+    )
     correlation_axis.grid(alpha=0.25)
-    correlation_axis.legend(loc="best", fontsize=8, ncols=2)
-
-    duration_data = build_icme_duration_by_cr(
-        cr_stats=cr_stats,
-        events=events,
-        sat=sat,
-    )
-    event_axis.hlines(
-        duration_data["icme_duration_hours"],
-        duration_data["cr"] - 0.42,
-        duration_data["cr"] + 0.42,
-        color="tab:orange",
-        linewidth=3.0,
-        zorder=3,
-    )
-    event_axis.set_ylabel("ICME duration per CR (h)")
-    event_axis.set_xlabel("Carrington rotation")
-    event_axis.set_ylim(bottom=0.0)
-    event_axis.set_xlim(
-        duration_data["cr"].min() - 0.5,
-        duration_data["cr"].max() + 0.5,
-    )
-    event_axis.grid(alpha=0.25)
-
-    sat_events = events.loc[events["sat"] == sat].copy()
-    sat_events["event_cr"] = pd.to_numeric(
-        sat_events["event_cr"], errors="coerce"
-    )
-    sat_events["dst_min"] = pd.to_numeric(
-        sat_events["dst_min"], errors="coerce"
-    )
-    dst_events = sat_events.dropna(subset=["event_cr", "dst_min"])
-    if not dst_events.empty:
-        dst_axis = event_axis.twinx()
-        dst_axis.scatter(
-            dst_events["event_cr"],
-            dst_events["dst_min"],
-            color="tab:purple",
-            marker="v",
-            s=24,
-            zorder=4,
-        )
-        dst_axis.set_ylabel("Minimum Dst per ICME (nT)", color="tab:purple")
-        dst_axis.tick_params(axis="y", colors="tab:purple")
-        dst_axis.axhline(0.0, color="tab:purple", linewidth=0.7, alpha=0.4)
+    correlation_axis.legend(loc="best", fontsize=12, ncols=2)
 
     return fig
 
