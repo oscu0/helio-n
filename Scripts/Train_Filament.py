@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+from scipy import ndimage
+import sunpy.map
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
@@ -18,9 +20,28 @@ from Library.Filaments import (
     CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
     CATALOG_MIN_ALIGNED_CENTERLINE_PX,
     FEATURE_COLUMNS,
+    MAGFILO_ALIGNMENT_TOLERANCE_DEG,
+    MAGFILO_MIN_ALIGNED_CENTERLINE_FRACTION,
+    MAGFILO_MIN_ALIGNED_CENTERLINE_PX,
+    MAGFILO_POLYGON_TOLERANCE_PX,
+    MAGFILO_SUPPORT_RADIUS_PX,
     build_filament_feature_table,
+    compute_catalog_centerline_metrics,
+    compute_magfilo_centerline_metrics,
     load_kislovodsk_catalog,
+    magfilo_is_filament,
+    rasterize_catalog_segments,
+    select_catalog_segments,
 )
+from Library.GONG import (
+    load_magfilo,
+    magfilo_observations,
+    project_magfilo_observation,
+    projected_spine_segments,
+    rasterize_projected_annotations,
+    rasterize_projected_spines,
+)
+from Library.IO import prepare_fits, prepare_mask
 
 
 def sigmoid(values):
@@ -221,6 +242,214 @@ def external_label_frame_keys(labels_path):
     return set(labels.loc[covered, "frame_key"])
 
 
+def matched_magfilo_frames(paths_df, observations, window_hours):
+    assert window_hours > 0.0
+    frame_times = pd.to_datetime(paths_df.index, format="%Y%m%d_%H%M")
+    matches = {}
+    unmatched = 0
+    for observation in observations.itertuples(index=False):
+        offsets = np.abs(frame_times - observation.observation_dt)
+        frame_position = offsets.argmin()
+        offset_hours = offsets[frame_position].total_seconds() / 3600.0
+        if offset_hours > window_hours:
+            unmatched += 1
+            continue
+        frame_key = paths_df.index[frame_position]
+        matches.setdefault(frame_key, []).append(
+            {
+                "observation": observation,
+                "time_offset_hours": offset_hours,
+            }
+        )
+    return matches, unmatched
+
+
+def magfilo_fits_by_name(fits_root):
+    fits_paths = list(Path(fits_root).rglob("*.fits.fz"))
+    paths_by_name = {path.name: path for path in fits_paths}
+    assert len(paths_by_name) == len(fits_paths), (
+        f"MAGFiLO FITS cache has duplicate filenames under {fits_root}"
+    )
+    return paths_by_name
+
+
+def build_catalog_label_table(
+    paths_df,
+    kislovodsk_catalog,
+    magfilo_catalog,
+    magfilo_matches,
+    magfilo_fits,
+    catalog_window_hours,
+    catalog_support_radius_px,
+    catalog_alignment_tolerance_deg,
+    catalog_min_aligned_centerline_px,
+    catalog_min_aligned_centerline_fraction,
+    magfilo_support_radius_px,
+    magfilo_polygon_tolerance_px,
+    magfilo_alignment_tolerance_deg,
+    magfilo_min_aligned_centerline_px,
+    magfilo_min_aligned_centerline_fraction,
+):
+    label_frames = []
+    for frame_key in paths_df.index:
+        observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
+        kislovodsk_filaments = select_catalog_segments(
+            kislovodsk_catalog,
+            observation_dt,
+            catalog_window_hours,
+        )
+        if not kislovodsk_filaments.empty or frame_key in magfilo_matches:
+            label_frames.append((frame_key, kislovodsk_filaments))
+
+    records = []
+    for frame_key, kislovodsk_filaments in label_frames:
+        observation = paths_df.loc[frame_key]
+        assert pd.notna(observation.fits_path), f"Missing AIA 193 path for {frame_key}"
+        assert pd.notna(observation.mask_path), f"Missing mask path for {frame_key}"
+        aia_map, _ = prepare_fits(observation.fits_path)
+        candidate_mask = prepare_mask(observation.mask_path).astype(bool)
+        assert candidate_mask.shape == aia_map.data.shape
+        labels, component_count = ndimage.label(
+            candidate_mask,
+            structure=np.ones((3, 3), dtype=int),
+        )
+        if component_count == 0:
+            continue
+
+        kislovodsk_available = not kislovodsk_filaments.empty
+        if kislovodsk_available:
+            kislovodsk_mask, kislovodsk_rasterized, kislovodsk_segments = (
+                rasterize_catalog_segments(
+                    aia_map,
+                    kislovodsk_filaments,
+                    return_projected_segments=True,
+                )
+            )
+            kislovodsk_distance = (
+                ndimage.distance_transform_edt(~kislovodsk_mask)
+                if kislovodsk_mask.any()
+                else np.full(candidate_mask.shape, np.inf)
+            )
+        else:
+            kislovodsk_rasterized = 0
+            kislovodsk_segments = np.empty((0, 4), dtype=np.float32)
+            kislovodsk_distance = np.full(candidate_mask.shape, np.inf)
+
+        magfilo_matches_for_frame = magfilo_matches.get(frame_key, [])
+        magfilo_available = bool(magfilo_matches_for_frame)
+        if magfilo_available:
+            projected_magfilo = []
+            for magfilo_match in magfilo_matches_for_frame:
+                magfilo_observation = magfilo_match["observation"]
+                fits_name = Path(magfilo_observation.url).stem + ".fits.fz"
+                assert fits_name in magfilo_fits, (
+                    f"MAGFiLO FITS is not cached for {frame_key}: {fits_name}"
+                )
+                gong_map = sunpy.map.Map(magfilo_fits[fits_name])
+                projected_magfilo.extend(
+                    project_magfilo_observation(
+                        magfilo_catalog,
+                        {"image_ids": magfilo_observation.image_ids},
+                        gong_map,
+                        aia_map,
+                    )
+                )
+            magfilo_polygon_mask = rasterize_projected_annotations(
+                projected_magfilo,
+                candidate_mask.shape,
+            )
+            magfilo_spine_mask = rasterize_projected_spines(
+                projected_magfilo,
+                candidate_mask.shape,
+            )
+            magfilo_segments = projected_spine_segments(projected_magfilo)
+            magfilo_distance = (
+                ndimage.distance_transform_edt(~magfilo_spine_mask)
+                if magfilo_spine_mask.any()
+                else np.full(candidate_mask.shape, np.inf)
+            )
+        else:
+            magfilo_polygon_mask = np.zeros(candidate_mask.shape, dtype=bool)
+            magfilo_spine_mask = np.zeros(candidate_mask.shape, dtype=bool)
+            magfilo_segments = np.empty((0, 4), dtype=np.float32)
+            magfilo_distance = np.full(candidate_mask.shape, np.inf)
+
+        for component_id in range(1, component_count + 1):
+            component = labels == component_id
+            kislovodsk_metrics = compute_catalog_centerline_metrics(
+                component,
+                kislovodsk_distance,
+                kislovodsk_available,
+                projected_segments=kislovodsk_segments,
+                support_radius_px=catalog_support_radius_px,
+                alignment_tolerance_deg=catalog_alignment_tolerance_deg,
+            )
+            magfilo_metrics = compute_magfilo_centerline_metrics(
+                component,
+                magfilo_distance,
+                magfilo_spine_mask,
+                magfilo_polygon_mask,
+                magfilo_segments,
+                magfilo_available,
+                support_radius_px=magfilo_support_radius_px,
+                polygon_tolerance_px=magfilo_polygon_tolerance_px,
+                alignment_tolerance_deg=magfilo_alignment_tolerance_deg,
+            )
+            records.append(
+                {
+                    "frame_key": frame_key,
+                    "component_id": component_id,
+                    "kislovodsk_available": kislovodsk_available,
+                    "kislovodsk_is_filament": (
+                        int(
+                            kislovodsk_metrics["catalog_aligned_centerline_px"]
+                            >= catalog_min_aligned_centerline_px
+                            and kislovodsk_metrics[
+                                "catalog_aligned_centerline_fraction"
+                            ]
+                            >= catalog_min_aligned_centerline_fraction
+                        )
+                        if kislovodsk_available
+                        else np.nan
+                    ),
+                    "magfilo_available": magfilo_available,
+                    "magfilo_is_filament": (
+                        magfilo_is_filament(
+                            magfilo_metrics,
+                            magfilo_min_aligned_centerline_px,
+                            magfilo_min_aligned_centerline_fraction,
+                        )
+                        if magfilo_available
+                        else np.nan
+                    ),
+                    "magfilo_observation_dt": (
+                        min(
+                            match["observation"].observation_dt
+                            for match in magfilo_matches_for_frame
+                        )
+                        if magfilo_available
+                        else pd.NaT
+                    ),
+                    "magfilo_time_offset_hours": (
+                        min(
+                            match["time_offset_hours"]
+                            for match in magfilo_matches_for_frame
+                        )
+                        if magfilo_available
+                        else np.nan
+                    ),
+                    "kislovodsk_segments": len(kislovodsk_filaments),
+                    "kislovodsk_segments_rasterized": kislovodsk_rasterized,
+                    **{
+                        key.replace("catalog_", "kislovodsk_"): value
+                        for key, value in kislovodsk_metrics.items()
+                    },
+                    **magfilo_metrics,
+                }
+            )
+    return pd.DataFrame(records), len(label_frames)
+
+
 def assign_training_labels(features):
     if "kislovodsk_available" not in features:
         features["kislovodsk_available"] = features["catalog_available"]
@@ -252,6 +481,12 @@ def main(argv=None):
     parser.add_argument("start", help="inclusive YYYYMMDD")
     parser.add_argument("end", help="inclusive YYYYMMDD")
     parser.add_argument(
+        "--mode",
+        choices=("train", "labels"),
+        default="train",
+        help="Run model training or build the Kislovodsk/MAGFiLO label table.",
+    )
+    parser.add_argument(
         "--paths-parquet",
         type=Path,
         default=Path(paths["artifact_root"]) / "Paths.parquet",
@@ -262,6 +497,18 @@ def main(argv=None):
         default=ROOT_DIR / "Data" / "Kislovodsk Filaments.csv",
     )
     parser.add_argument("--labels-parquet", type=Path)
+    parser.add_argument("--output-labels-parquet", type=Path)
+    parser.add_argument(
+        "--magfilo-catalog",
+        type=Path,
+        default=ROOT_DIR / "Data" / "MAGFiLO" / "magfilo_2024_v1.0.json",
+    )
+    parser.add_argument(
+        "--magfilo-fits-root",
+        type=Path,
+        default=ROOT_DIR / "Data" / "MAGFiLO",
+    )
+    parser.add_argument("--magfilo-window-hours", type=float, default=0.5)
     parser.add_argument("--features-parquet", type=Path)
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--validation-fraction", type=float, default=0.2)
@@ -281,6 +528,31 @@ def main(argv=None):
         "--catalog-min-aligned-centerline-fraction",
         type=float,
         default=CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
+    )
+    parser.add_argument(
+        "--magfilo-support-radius-px",
+        type=float,
+        default=MAGFILO_SUPPORT_RADIUS_PX,
+    )
+    parser.add_argument(
+        "--magfilo-polygon-tolerance-px",
+        type=float,
+        default=MAGFILO_POLYGON_TOLERANCE_PX,
+    )
+    parser.add_argument(
+        "--magfilo-alignment-tolerance-deg",
+        type=float,
+        default=MAGFILO_ALIGNMENT_TOLERANCE_DEG,
+    )
+    parser.add_argument(
+        "--magfilo-min-aligned-centerline-px",
+        type=int,
+        default=MAGFILO_MIN_ALIGNED_CENTERLINE_PX,
+    )
+    parser.add_argument(
+        "--magfilo-min-aligned-centerline-fraction",
+        type=float,
+        default=MAGFILO_MIN_ALIGNED_CENTERLINE_FRACTION,
     )
     parser.add_argument("--l2", type=float, default=1.0)
     parser.add_argument("--max-iterations", type=int, default=1000)
@@ -313,6 +585,74 @@ def main(argv=None):
     stem = f"{args.start}-{args.end}"
     features_path = args.features_parquet or output_dir / f"Features {stem}.parquet"
     model_path = args.model_path or output_dir / f"Classifier {stem}.json"
+
+    if args.mode == "labels":
+        assert args.magfilo_window_hours > 0.0
+        paths_df = pd.read_parquet(args.paths_parquet)
+        start_key = f"{args.start}_0000"
+        end_key = f"{args.end}_9999"
+        paths_df = paths_df.loc[start_key:end_key].copy()
+        if args.max_frames is not None:
+            paths_df = paths_df.iloc[: args.max_frames]
+        assert not paths_df.empty, "No observations in the requested interval."
+        assert paths_df[["fits_path", "mask_path"]].notna().all().all(), (
+            "Catalog labels require AIA 193 and mask paths for every frame."
+        )
+
+        magfilo_catalog = load_magfilo(args.magfilo_catalog)
+        observations = magfilo_observations(magfilo_catalog)
+        observations = observations.loc[
+            observations["observation_dt"].dt.strftime("%Y%m%d").between(
+                args.start,
+                args.end,
+            )
+        ].reset_index(drop=True)
+        magfilo_matches, unmatched_magfilo = matched_magfilo_frames(
+            paths_df,
+            observations,
+            args.magfilo_window_hours,
+        )
+        labels, label_frames = build_catalog_label_table(
+            paths_df,
+            load_kislovodsk_catalog(args.catalog),
+            magfilo_catalog,
+            magfilo_matches,
+            magfilo_fits_by_name(args.magfilo_fits_root),
+            args.catalog_window_hours,
+            args.catalog_support_radius_px,
+            args.catalog_alignment_tolerance_deg,
+            args.catalog_min_aligned_centerline_px,
+            args.catalog_min_aligned_centerline_fraction,
+            args.magfilo_support_radius_px,
+            args.magfilo_polygon_tolerance_px,
+            args.magfilo_alignment_tolerance_deg,
+            args.magfilo_min_aligned_centerline_px,
+            args.magfilo_min_aligned_centerline_fraction,
+        )
+        assert not labels.empty, "No components were found in catalog-covered frames."
+        labels_path = (
+            args.output_labels_parquet
+            or output_dir / f"Labels {stem}.parquet"
+        )
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        labels.to_parquet(labels_path, index=False)
+        matched_magfilo_observations = sum(
+            len(matches) for matches in magfilo_matches.values()
+        )
+        print(
+            f"Catalog labels: {len(labels)} components across {label_frames} frames; "
+            f"MAGFiLO matched: {matched_magfilo_observations} observations on "
+            f"{len(magfilo_matches)} AIA frames / {len(observations)} "
+            f"({unmatched_magfilo} outside {args.magfilo_window_hours:g} h)."
+        )
+        print(
+            "Kislovodsk positives: "
+            f"{int(labels['kislovodsk_is_filament'].fillna(0).sum())}; "
+            "MAGFiLO positives: "
+            f"{int(labels['magfilo_is_filament'].fillna(0).sum())}."
+        )
+        print(f"Saved {labels_path}")
+        return 0
 
     if args.reuse_features:
         features = pd.read_parquet(features_path)
