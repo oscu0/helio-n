@@ -47,13 +47,11 @@ def magfilo_image_record(catalog, image_id):
 
 
 def magfilo_annotations(catalog, image_id):
-    annotations = [
+    return [
         annotation
         for annotation in catalog["annotations"]
         if annotation["image_id"] == image_id
     ]
-    assert annotations, f"No MAGFiLO annotations for {image_id}"
-    return annotations
 
 
 def magfilo_observations(catalog):
