@@ -99,6 +99,8 @@ reads each mask first, then skips empty masks and catalog-uncovered frames
 before expensive AIA 304/HMI work. Do not use it for 2018 inference features.
 Pass the same full region-level catalog table through `--labels-parquet` to
 both trainer invocations when using the Kislovodsk-or-MAGFiLO label union.
+Feature collection uses a bounded process pool: 8 workers on Miracle and 3 on
+risc1, configurable with `--workers`.
 
 Build 2018 features, remove predicted filament components without overwriting
 the IDL masks, and calculate the compatible area/SW input:

@@ -11,7 +11,7 @@ from scipy.optimize import minimize
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
 
-from Library.Config import paths
+from Library.Config import filament_feature_workers, paths
 from Library.Filaments import (
     CATALOG_ALIGNMENT_TOLERANCE_DEG,
     CATALOG_DISTANCE_QUANTILE,
@@ -287,6 +287,12 @@ def main(argv=None):
     parser.add_argument("--target-precision", type=float, default=0.9)
     parser.add_argument("--max-frames", type=int)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=filament_feature_workers,
+        help="Feature-collection worker processes (from Machine.json by default).",
+    )
+    parser.add_argument(
         "--training-only",
         action="store_true",
         help=(
@@ -300,6 +306,7 @@ def main(argv=None):
     assert 0.0 < args.validation_fraction < 1.0
     assert args.l2 >= 0.0
     assert 0.0 < args.target_precision <= 1.0
+    assert args.workers >= 1, "workers must be positive"
 
     output_dir = ROOT_DIR / "Outputs" / "Filaments"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -338,6 +345,7 @@ def main(argv=None):
             ),
             training_only=args.training_only,
             label_frame_keys=label_frame_keys,
+            workers=args.workers,
         )
         assert not features.empty, "No mask components were produced."
         features_path.parent.mkdir(parents=True, exist_ok=True)

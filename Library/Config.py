@@ -46,6 +46,7 @@ train_batch_size = int(machine_config["train_batch_size"])
 train_workers = int(machine_config["train_workers"])
 train_max_queue_size = int(machine_config["train_max_queue_size"])
 train_use_multiprocessing = bool(machine_config["train_use_multiprocessing"])
+filament_feature_workers = int(machine_config["filament_feature_workers"])
 
 with open(SCRIPT_DIR / "../Config/Plot.json", "r") as f:
     plot_config = json.load(f)

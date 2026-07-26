@@ -1,4 +1,6 @@
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as mp
 
 import astropy.units as u
 import numpy as np
@@ -542,6 +544,88 @@ def summarize_component(
     }
 
 
+def build_filament_feature_frame(task):
+    (
+        frame_key,
+        observation,
+        filaments,
+        catalog_support_radius_px,
+        catalog_alignment_tolerance_deg,
+        catalog_min_aligned_centerline_px,
+        catalog_min_aligned_centerline_fraction,
+    ) = task
+    observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
+    candidate_mask = prepare_mask(observation.mask_path).astype(bool)
+    labels, component_count = ndimage.label(
+        candidate_mask,
+        structure=np.ones((3, 3), dtype=int),
+    )
+    assert component_count > 0, f"Empty mask passed for {frame_key}"
+    catalog_available = not filaments.empty
+
+    assert pd.notna(observation.hmi_path), f"Missing HMI path for {frame_key}"
+    assert pd.notna(observation.aia304_path), (
+        f"Missing AIA 304 path for {frame_key}"
+    )
+    aia_map, aia193 = prepare_fits(observation.fits_path)
+    _, aia304 = prepare_fits(observation.aia304_path)
+    assert candidate_mask.shape == aia193.shape == aia304.shape == aia_map.data.shape
+
+    hmi_los, hmi_radial, hmi_valid = compute_hmi_input(
+        aia_map,
+        observation.hmi_path,
+    )
+    if catalog_available:
+        filament_mask, rasterized, projected_segments = rasterize_catalog_segments(
+            aia_map,
+            filaments,
+            return_projected_segments=True,
+        )
+        if filament_mask.any():
+            filament_distance = ndimage.distance_transform_edt(~filament_mask)
+        else:
+            filament_distance = np.full(candidate_mask.shape, np.inf)
+    else:
+        filament_distance = np.full(candidate_mask.shape, np.inf)
+        rasterized = 0
+        projected_segments = np.empty((0, 4), dtype=np.float32)
+
+    rows = []
+    for component_id in range(1, component_count + 1):
+        component = labels == component_id
+        summary = summarize_component(
+            component,
+            aia193,
+            aia304,
+            hmi_los,
+            hmi_radial,
+            hmi_valid,
+            filament_distance,
+            catalog_available,
+            projected_segments,
+            catalog_support_radius_px,
+            catalog_alignment_tolerance_deg,
+            catalog_min_aligned_centerline_px,
+            catalog_min_aligned_centerline_fraction,
+        )
+        rows.append(
+            {
+                "frame_key": frame_key,
+                "observation_dt": observation_dt,
+                "component_id": component_id,
+                "mask_path": observation.mask_path,
+                "catalog_available": catalog_available,
+                "catalog_datetime": (
+                    filaments["datetime"].iloc[0] if catalog_available else pd.NaT
+                ),
+                "catalog_segments": len(filaments),
+                "catalog_segments_rasterized": rasterized,
+                **summary,
+            }
+        )
+    return rows
+
+
 def build_filament_feature_table(
     paths_df,
     catalog,
@@ -552,21 +636,23 @@ def build_filament_feature_table(
     catalog_min_aligned_centerline_fraction=CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
     training_only=False,
     label_frame_keys=None,
+    workers=1,
 ):
     rows = []
+    assert workers >= 1, "workers must be positive"
     assert paths_df[["fits_path", "mask_path"]].notna().all().all(), (
         "Filament features require AIA 193 and mask paths for every frame."
     )
     skipped_empty = 0
     skipped_unlabeled = 0
-    processed = 0
+    eligible = []
 
-    progress = tqdm(
+    filter_progress = tqdm(
         paths_df.iterrows(),
         total=len(paths_df),
-        desc="Filament features",
+        desc="Filament frame filter",
     )
-    for frame_key, observation in progress:
+    for frame_key, observation in filter_progress:
         observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
         candidate_mask = prepare_mask(observation.mask_path).astype(bool)
         labels, component_count = ndimage.label(
@@ -575,8 +661,8 @@ def build_filament_feature_table(
         )
         if component_count == 0:
             skipped_empty += 1
-            progress.set_postfix(
-                processed=processed,
+            filter_progress.set_postfix(
+                queued=len(eligible),
                 empty=skipped_empty,
                 unlabeled=skipped_unlabeled,
             )
@@ -595,82 +681,63 @@ def build_filament_feature_table(
         )
         if training_only and not label_available:
             skipped_unlabeled += 1
-            progress.set_postfix(
-                processed=processed,
+            filter_progress.set_postfix(
+                queued=len(eligible),
                 empty=skipped_empty,
                 unlabeled=skipped_unlabeled,
             )
             continue
 
-        assert pd.notna(observation.hmi_path), f"Missing HMI path for {frame_key}"
-        assert pd.notna(observation.aia304_path), (
-            f"Missing AIA 304 path for {frame_key}"
-        )
-        aia_map, aia193 = prepare_fits(observation.fits_path)
-        _, aia304 = prepare_fits(observation.aia304_path)
-        assert candidate_mask.shape == aia193.shape == aia304.shape == aia_map.data.shape
-
-        hmi_los, hmi_radial, hmi_valid = compute_hmi_input(
-            aia_map,
-            observation.hmi_path,
-        )
-        if catalog_available:
-            filament_mask, rasterized, projected_segments = rasterize_catalog_segments(
-                aia_map,
+        eligible.append(
+            (
+                frame_key,
+                observation,
                 filaments,
-                return_projected_segments=True,
-            )
-            if filament_mask.any():
-                filament_distance = ndimage.distance_transform_edt(~filament_mask)
-            else:
-                filament_distance = np.full(candidate_mask.shape, np.inf)
-        else:
-            filament_distance = np.full(candidate_mask.shape, np.inf)
-            rasterized = 0
-            projected_segments = np.empty((0, 4), dtype=np.float32)
-
-        for component_id in range(1, component_count + 1):
-            component = labels == component_id
-            summary = summarize_component(
-                component,
-                aia193,
-                aia304,
-                hmi_los,
-                hmi_radial,
-                hmi_valid,
-                filament_distance,
-                catalog_available,
-                projected_segments,
                 catalog_support_radius_px,
                 catalog_alignment_tolerance_deg,
                 catalog_min_aligned_centerline_px,
                 catalog_min_aligned_centerline_fraction,
             )
-            rows.append(
-                {
-                    "frame_key": frame_key,
-                    "observation_dt": observation_dt,
-                    "component_id": component_id,
-                    "mask_path": observation.mask_path,
-                    "catalog_available": catalog_available,
-                    "catalog_datetime": (
-                        filaments["datetime"].iloc[0] if catalog_available else pd.NaT
-                    ),
-                    "catalog_segments": len(filaments),
-                    "catalog_segments_rasterized": rasterized,
-                    **summary,
-                }
-            )
-        processed += 1
-        progress.set_postfix(
-            processed=processed,
+        )
+        filter_progress.set_postfix(
+            queued=len(eligible),
             empty=skipped_empty,
             unlabeled=skipped_unlabeled,
         )
 
+    if not eligible:
+        print(
+            "Feature collection: "
+            f"processed 0 frames; skipped {skipped_empty} empty masks and "
+            f"{skipped_unlabeled} unlabeled frames."
+        )
+        return pd.DataFrame(rows)
+
+    if workers == 1:
+        feature_rows = map(build_filament_feature_frame, eligible)
+        for frame_rows in tqdm(
+            feature_rows,
+            total=len(eligible),
+            desc="Filament features",
+        ):
+            rows.extend(frame_rows)
+    else:
+        context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=context,
+        ) as executor:
+            feature_rows = executor.map(build_filament_feature_frame, eligible)
+            for frame_rows in tqdm(
+                feature_rows,
+                total=len(eligible),
+                desc=f"Filament features ({workers} workers)",
+            ):
+                rows.extend(frame_rows)
+
     print(
         "Feature collection: "
-        f"processed {processed} frames; skipped {skipped_empty} empty masks and "
+        f"processed {len(eligible)} frames; skipped {skipped_empty} empty masks and "
         f"{skipped_unlabeled} unlabeled frames."
     )
 
