@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import html
 import json
+import multiprocessing as mp
 import sys
 from pathlib import Path
 
@@ -11,9 +13,9 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 from scipy.optimize import minimize
+from skimage.morphology import skeletonize
 import sunpy.map
 from matplotlib import pyplot as plt
-from tqdm import tqdm
 from tqdm import tqdm
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -48,6 +50,10 @@ from Library.GONG import (
     rasterize_projected_spines,
 )
 from Library.IO import prepare_fits, prepare_mask
+
+
+OVERLAP_MAGFILO_CATALOG = None
+OVERLAP_MAGFILO_FITS = None
 
 
 def sigmoid(values):
@@ -277,6 +283,223 @@ def magfilo_fits_by_name(fits_root):
         f"MAGFiLO FITS cache has duplicate filenames under {fits_root}"
     )
     return paths_by_name
+
+
+def initialize_overlap_worker(magfilo_catalog_path, magfilo_fits_root):
+    global OVERLAP_MAGFILO_CATALOG, OVERLAP_MAGFILO_FITS
+    OVERLAP_MAGFILO_CATALOG = load_magfilo(magfilo_catalog_path)
+    OVERLAP_MAGFILO_FITS = magfilo_fits_by_name(magfilo_fits_root)
+
+
+def build_catalog_overlap_frame(task):
+    """Return raw catalog/component contacts without feature calculation.
+
+    Kislovodsk has no widths, so a contact is any candidate skeleton pixel
+    within the supplied support radius.  MAGFiLO supplies polygons, so direct
+    and tolerance-dilated pixel intersections are both retained.  This is a
+    candidate finder, not the orientation-aware training labeler.
+    """
+    (
+        frame_key,
+        observation,
+        kislovodsk_filaments,
+        magfilo_matches_for_frame,
+        catalog_support_radius_px,
+        magfilo_polygon_tolerance_px,
+    ) = task
+    candidate_mask = prepare_mask(observation["mask_path"]).astype(bool)
+    labels, component_count = ndimage.label(
+        candidate_mask,
+        structure=np.ones((3, 3), dtype=int),
+    )
+    kislovodsk_available = not kislovodsk_filaments.empty
+    magfilo_available = bool(magfilo_matches_for_frame)
+    summary = {
+        "frame_key": frame_key,
+        "components": component_count,
+        "candidate_pixels": int(candidate_mask.sum()),
+        "kislovodsk_available": kislovodsk_available,
+        "magfilo_available": magfilo_available,
+        "kislovodsk_segments": len(kislovodsk_filaments),
+        "magfilo_observations": len(magfilo_matches_for_frame),
+        "magfilo_annotations": int(
+            sum(
+                match["observation"].filament_annotations
+                for match in magfilo_matches_for_frame
+            )
+        ),
+        "kislovodsk_contact_components": 0,
+        "magfilo_direct_overlap_components": 0,
+        "magfilo_tolerance_overlap_components": 0,
+        "any_contact_components": 0,
+    }
+    if component_count == 0 or not (kislovodsk_available or magfilo_available):
+        return [], summary
+
+    # SunPy map construction supplies the AIA WCS without the normalization
+    # and disk-statistic work performed by prepare_fits.
+    aia_map = sunpy.map.Map(observation["fits_path"])
+    assert candidate_mask.shape == aia_map.data.shape
+    if kislovodsk_available:
+        kislovodsk_mask, rasterized_segments = rasterize_catalog_segments(
+            aia_map,
+            kislovodsk_filaments,
+        )
+        kislovodsk_distance = (
+            ndimage.distance_transform_edt(~kislovodsk_mask)
+            if kislovodsk_mask.any()
+            else np.full(candidate_mask.shape, np.inf)
+        )
+    else:
+        rasterized_segments = 0
+        kislovodsk_distance = np.full(candidate_mask.shape, np.inf)
+    summary["kislovodsk_segments_rasterized"] = rasterized_segments
+
+    if magfilo_available:
+        projected_magfilo = []
+        for magfilo_match in magfilo_matches_for_frame:
+            magfilo_observation = magfilo_match["observation"]
+            fits_name = Path(magfilo_observation.url).stem + ".fits.fz"
+            assert fits_name in OVERLAP_MAGFILO_FITS, (
+                f"MAGFiLO FITS is not cached for {frame_key}: {fits_name}"
+            )
+            gong_map = sunpy.map.Map(OVERLAP_MAGFILO_FITS[fits_name])
+            projected_magfilo.extend(
+                project_magfilo_observation(
+                    OVERLAP_MAGFILO_CATALOG,
+                    {"image_ids": magfilo_observation.image_ids},
+                    gong_map,
+                    aia_map,
+                )
+            )
+        magfilo_polygon_mask = rasterize_projected_annotations(
+            projected_magfilo,
+            candidate_mask.shape,
+        )
+        magfilo_polygon_tolerance_mask = ndimage.binary_dilation(
+            magfilo_polygon_mask,
+            iterations=int(np.ceil(magfilo_polygon_tolerance_px)),
+        )
+    else:
+        magfilo_polygon_mask = np.zeros(candidate_mask.shape, dtype=bool)
+        magfilo_polygon_tolerance_mask = magfilo_polygon_mask
+    summary["magfilo_polygon_pixels"] = int(magfilo_polygon_mask.sum())
+
+    records = []
+    for component_id in range(1, component_count + 1):
+        component = labels == component_id
+        centerline = skeletonize(component)
+        centerline_distances = kislovodsk_distance[centerline]
+        supported_centerline_px = int(
+            np.sum(centerline_distances <= catalog_support_radius_px)
+        )
+        direct_polygon_overlap_px = int((component & magfilo_polygon_mask).sum())
+        tolerance_polygon_overlap_px = int(
+            (component & magfilo_polygon_tolerance_mask).sum()
+        )
+        kislovodsk_contact = supported_centerline_px > 0
+        magfilo_direct_overlap = direct_polygon_overlap_px > 0
+        magfilo_tolerance_overlap = tolerance_polygon_overlap_px > 0
+        any_contact = kislovodsk_contact or magfilo_tolerance_overlap
+        summary["kislovodsk_contact_components"] += int(kislovodsk_contact)
+        summary["magfilo_direct_overlap_components"] += int(
+            magfilo_direct_overlap
+        )
+        summary["magfilo_tolerance_overlap_components"] += int(
+            magfilo_tolerance_overlap
+        )
+        summary["any_contact_components"] += int(any_contact)
+        if not any_contact:
+            continue
+        records.append(
+            {
+                "frame_key": frame_key,
+                "component_id": component_id,
+                "component_pixels": int(component.sum()),
+                "component_centerline_px": int(centerline.sum()),
+                "kislovodsk_available": kislovodsk_available,
+                "kislovodsk_supported_centerline_px": supported_centerline_px,
+                "kislovodsk_centerline_distance_min_px": (
+                    float(centerline_distances.min())
+                    if centerline_distances.size
+                    else np.inf
+                ),
+                "magfilo_available": magfilo_available,
+                "magfilo_polygon_direct_overlap_px": direct_polygon_overlap_px,
+                "magfilo_polygon_tolerance_overlap_px": (
+                    tolerance_polygon_overlap_px
+                ),
+                "magfilo_polygon_overlap_fraction": (
+                    float(direct_polygon_overlap_px / component.sum())
+                ),
+            }
+        )
+    return records, summary
+
+
+def build_catalog_overlap_table(
+    paths_df,
+    kislovodsk_catalog,
+    magfilo_matches,
+    catalog_window_hours,
+    catalog_support_radius_px,
+    magfilo_polygon_tolerance_px,
+    workers,
+    magfilo_catalog_path,
+    magfilo_fits_root,
+):
+    assert workers >= 1
+    tasks = []
+    for frame_key, observation in paths_df.iterrows():
+        kislovodsk_filaments = select_catalog_segments(
+            kislovodsk_catalog,
+            pd.to_datetime(frame_key, format="%Y%m%d_%H%M"),
+            catalog_window_hours,
+        )
+        magfilo_matches_for_frame = magfilo_matches.get(frame_key, [])
+        if kislovodsk_filaments.empty and not magfilo_matches_for_frame:
+            continue
+        tasks.append(
+            (
+                frame_key,
+                observation.to_dict(),
+                kislovodsk_filaments,
+                magfilo_matches_for_frame,
+                catalog_support_radius_px,
+                magfilo_polygon_tolerance_px,
+            )
+        )
+
+    records = []
+    summaries = []
+    initializer_args = (magfilo_catalog_path, magfilo_fits_root)
+    if workers == 1:
+        initialize_overlap_worker(*initializer_args)
+        results = map(build_catalog_overlap_frame, tasks)
+        for frame_records, summary in tqdm(
+            results,
+            total=len(tasks),
+            desc="Catalog overlap scan",
+        ):
+            records.extend(frame_records)
+            summaries.append(summary)
+    else:
+        context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=context,
+            initializer=initialize_overlap_worker,
+            initargs=initializer_args,
+        ) as executor:
+            results = executor.map(build_catalog_overlap_frame, tasks)
+            for frame_records, summary in tqdm(
+                results,
+                total=len(tasks),
+                desc=f"Catalog overlap scan ({workers} workers)",
+            ):
+                records.extend(frame_records)
+                summaries.append(summary)
+    return pd.DataFrame(records), pd.DataFrame(summaries), len(tasks)
 
 
 def build_catalog_label_table(
@@ -603,9 +826,12 @@ def main(argv=None):
     parser.add_argument("end", help="inclusive YYYYMMDD")
     parser.add_argument(
         "--mode",
-        choices=("train", "labels", "review"),
+        choices=("train", "labels", "review", "overlaps"),
         default="train",
-        help="Run model training, build labels, or render the MAGFiLO review gallery.",
+        help=(
+            "Run model training, build labels, render the MAGFiLO review gallery, "
+            "or scan raw catalog/component contacts."
+        ),
     )
     parser.add_argument(
         "--paths-parquet",
@@ -619,6 +845,7 @@ def main(argv=None):
     )
     parser.add_argument("--labels-parquet", type=Path)
     parser.add_argument("--output-labels-parquet", type=Path)
+    parser.add_argument("--output-overlaps-parquet", type=Path)
     parser.add_argument("--review-output-dir", type=Path)
     parser.add_argument(
         "--magfilo-catalog",
@@ -707,6 +934,70 @@ def main(argv=None):
     stem = f"{args.start}-{args.end}"
     features_path = args.features_parquet or output_dir / f"Features {stem}.parquet"
     model_path = args.model_path or output_dir / f"Classifier {stem}.json"
+
+    if args.mode == "overlaps":
+        assert args.magfilo_window_hours > 0.0
+        paths_df = pd.read_parquet(args.paths_parquet)
+        start_key = f"{args.start}_0000"
+        end_key = f"{args.end}_9999"
+        paths_df = paths_df.loc[start_key:end_key].copy()
+        if args.max_frames is not None:
+            paths_df = paths_df.iloc[: args.max_frames]
+        assert not paths_df.empty, "No observations in the requested interval."
+        assert paths_df[["fits_path", "mask_path"]].notna().all().all(), (
+            "Catalog overlap scanning requires AIA 193 and mask paths for every frame."
+        )
+        magfilo_catalog = load_magfilo(args.magfilo_catalog)
+        observations = magfilo_observations(magfilo_catalog)
+        observations = observations.loc[
+            observations["observation_dt"].dt.strftime("%Y%m%d").between(
+                args.start,
+                args.end,
+            )
+        ].reset_index(drop=True)
+        magfilo_matches, unmatched_magfilo = matched_magfilo_frames(
+            paths_df,
+            observations,
+            args.magfilo_window_hours,
+        )
+        overlaps, overlap_frames, scanned_frames = build_catalog_overlap_table(
+            paths_df,
+            load_kislovodsk_catalog(args.catalog),
+            magfilo_matches,
+            args.catalog_window_hours,
+            args.catalog_support_radius_px,
+            args.magfilo_polygon_tolerance_px,
+            args.workers,
+            args.magfilo_catalog,
+            args.magfilo_fits_root,
+        )
+        overlaps_path = (
+            args.output_overlaps_parquet
+            or output_dir / f"Overlap Scan {stem}.parquet"
+        )
+        overlaps_path.parent.mkdir(parents=True, exist_ok=True)
+        overlaps.to_parquet(overlaps_path, index=False)
+        overlap_frames.to_parquet(
+            overlaps_path.with_suffix(".frames.parquet"),
+            index=False,
+        )
+        print(
+            f"Scanned {scanned_frames} catalog-covered frames; "
+            f"MAGFiLO matched: {sum(len(matches) for matches in magfilo_matches.values())} "
+            f"observations on {len(magfilo_matches)} frames / {len(observations)} "
+            f"({unmatched_magfilo} outside {args.magfilo_window_hours:g} h)."
+        )
+        print(
+            f"Kislovodsk contacts: "
+            f"{int(overlap_frames['kislovodsk_contact_components'].sum())}; "
+            f"MAGFiLO direct polygon contacts: "
+            f"{int(overlap_frames['magfilo_direct_overlap_components'].sum())}; "
+            f"MAGFiLO tolerance contacts: "
+            f"{int(overlap_frames['magfilo_tolerance_overlap_components'].sum())}."
+        )
+        print(f"Saved {overlaps_path}")
+        print(f"Saved {overlaps_path.with_suffix('.frames.parquet')}")
+        return 0
 
     if args.mode in ("labels", "review"):
         assert args.magfilo_window_hours > 0.0
