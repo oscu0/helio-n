@@ -45,6 +45,11 @@
             "animation_1h_mult": 2.0
         }
     },
+    "miracle_idl_rerun": {
+        "inherits": "miracle",
+        "masks_root": "/mnt/sun/sdo/helio-n/masks-idl-rerun-20260725/chsun/0193/",
+        "artifact_root": "./Outputs/Artifacts/miracle_idl_rerun/"
+    },
     "miracle_mini": {
         "inherits": "miracle",
         "fits_root": "/home/smdc/mnt~sun/FITS/",
