@@ -27,7 +27,7 @@ from Library.GONG import (
     rasterize_projected_annotations,
     load_magfilo,
 )
-from Library.IO import prepare_mask
+from Library.IO import prepare_fits, prepare_mask
 
 
 CATEGORY_COLORS = {
@@ -113,7 +113,7 @@ def render_case(catalog, data_root, output_dir, case):
     mask_path = data_root / f"{case['mask_stem']}.png"
 
     gong_image = np.asarray(Image.open(gong_jpg_path).convert("L"))
-    gong_map = sunpy.map.Map(gong_fits_path)
+    gong_map, gong_display = prepare_fits(gong_fits_path)
     aia_map = sunpy.map.Map(aia_fits_path)
     aia_display = normalized_aia_display(aia_map)
     ch_mask = prepare_mask(mask_path).astype(bool)
@@ -129,6 +129,13 @@ def render_case(catalog, data_root, output_dir, case):
         gong_map,
         aia_map,
     )
+    source_projected = project_magfilo_annotations(
+        catalog,
+        case["image_id"],
+        gong_map,
+        gong_map,
+        solar_rotate_to_target=False,
+    )
     projected_mask = rasterize_projected_annotations(
         projected,
         aia_display.shape,
@@ -137,11 +144,11 @@ def render_case(catalog, data_root, output_dir, case):
 
     figure, axes = plt.subplots(
         1,
-        3,
-        figsize=(18, 6.4),
+        4,
+        figsize=(24, 6.4),
         layout="constrained",
     )
-    original_axis, projected_axis, regions_axis = axes
+    original_axis, source_axis, projected_axis, regions_axis = axes
 
     plot_original_annotations(
         original_axis,
@@ -153,6 +160,14 @@ def render_case(catalog, data_root, output_dir, case):
         f"{case['image_id']} — {len(annotations)} filaments\n"
         "MAGFiLO on exact GONG H-alpha\n"
         f"{gong_map.date.to_datetime():%Y-%m-%d %H:%M:%S} UTC",
+        fontsize=11,
+    )
+
+    source_axis.imshow(gong_display, origin="upper", cmap="gray")
+    plot_projected_annotations(source_axis, source_projected)
+    source_axis.set_title(
+        "Same annotations after COCO → FITS mapping\n"
+        "on the exact source GONG FITS",
         fontsize=11,
     )
 
