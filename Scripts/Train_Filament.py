@@ -205,6 +205,22 @@ def merge_external_labels(features, labels_path):
     )
 
 
+def external_label_frame_keys(labels_path):
+    labels = pd.read_parquet(labels_path)
+    required = {
+        "frame_key",
+        "kislovodsk_available",
+        "magfilo_available",
+    }
+    missing = required.difference(labels.columns)
+    assert not missing, f"External label table is missing: {sorted(missing)}"
+    covered = (
+        labels["kislovodsk_available"].fillna(False).astype(bool)
+        | labels["magfilo_available"].fillna(False).astype(bool)
+    )
+    return set(labels.loc[covered, "frame_key"])
+
+
 def assign_training_labels(features):
     if "kislovodsk_available" not in features:
         features["kislovodsk_available"] = features["catalog_available"]
@@ -270,6 +286,14 @@ def main(argv=None):
     parser.add_argument("--max-iterations", type=int, default=1000)
     parser.add_argument("--target-precision", type=float, default=0.9)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument(
+        "--training-only",
+        action="store_true",
+        help=(
+            "Skip empty masks and frames without a Kislovodsk or MAGFiLO label "
+            "before loading AIA 304 or HMI. Do not use for inference features."
+        ),
+    )
     parser.add_argument("--reuse-features", action="store_true")
     parser.add_argument("--features-only", action="store_true")
     args = parser.parse_args(argv)
@@ -295,6 +319,11 @@ def main(argv=None):
         assert not paths_df.empty, "No observations in the requested interval."
 
         catalog = load_kislovodsk_catalog(args.catalog)
+        label_frame_keys = (
+            external_label_frame_keys(args.labels_parquet)
+            if args.training_only and args.labels_parquet is not None
+            else None
+        )
         features = build_filament_feature_table(
             paths_df,
             catalog,
@@ -307,6 +336,8 @@ def main(argv=None):
             catalog_min_aligned_centerline_fraction=(
                 args.catalog_min_aligned_centerline_fraction
             ),
+            training_only=args.training_only,
+            label_frame_keys=label_frame_keys,
         )
         assert not features.empty, "No mask components were produced."
         features_path.parent.mkdir(parents=True, exist_ok=True)

@@ -84,7 +84,8 @@ After the exact final masks and AIA 304 files are present on Miracle:
 
 ```bash
 MACHINE=miracle python Scripts/Make.py Dataset
-MACHINE=miracle python Scripts/Train_Filament.py 20170101 20171231 --features-only
+MACHINE=miracle python Scripts/Train_Filament.py 20170101 20171231 \
+  --training-only --features-only
 MACHINE=miracle python Scripts/Train_Filament.py 20170101 20171231 --reuse-features
 ```
 
@@ -93,6 +94,9 @@ feature-only run is a label-health gate: do not train unless it reports both
 classes. The trainer uses a chronological day split, selects a
 high-precision validation threshold, saves an inspectable JSON model, and
 rejects any 2018 training data.
+`--training-only` is intentionally limited to 2017 feature construction: it
+reads each mask first, then skips empty masks and catalog-uncovered frames
+before expensive AIA 304/HMI work. Do not use it for 2018 inference features.
 Pass the same full region-level catalog table through `--labels-parquet` to
 both trainer invocations when using the Kislovodsk-or-MAGFiLO label union.
 

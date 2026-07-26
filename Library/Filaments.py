@@ -550,34 +550,70 @@ def build_filament_feature_table(
     catalog_alignment_tolerance_deg=CATALOG_ALIGNMENT_TOLERANCE_DEG,
     catalog_min_aligned_centerline_px=CATALOG_MIN_ALIGNED_CENTERLINE_PX,
     catalog_min_aligned_centerline_fraction=CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
+    training_only=False,
+    label_frame_keys=None,
 ):
     rows = []
-    required_paths = ["fits_path", "mask_path", "hmi_path", "aia304_path"]
-    assert paths_df[required_paths].notna().all().all(), (
-        "Filament features require AIA 193, mask, HMI, and AIA 304 for every frame."
+    assert paths_df[["fits_path", "mask_path"]].notna().all().all(), (
+        "Filament features require AIA 193 and mask paths for every frame."
     )
+    skipped_empty = 0
+    skipped_unlabeled = 0
+    processed = 0
 
-    for frame_key, observation in tqdm(
+    progress = tqdm(
         paths_df.iterrows(),
         total=len(paths_df),
         desc="Filament features",
-    ):
+    )
+    for frame_key, observation in progress:
         observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
-        aia_map, aia193 = prepare_fits(observation.fits_path)
-        _, aia304 = prepare_fits(observation.aia304_path)
         candidate_mask = prepare_mask(observation.mask_path).astype(bool)
-        assert candidate_mask.shape == aia193.shape == aia304.shape == aia_map.data.shape
-
-        hmi_los, hmi_radial, hmi_valid = compute_hmi_input(
-            aia_map,
-            observation.hmi_path,
+        labels, component_count = ndimage.label(
+            candidate_mask,
+            structure=np.ones((3, 3), dtype=int),
         )
+        if component_count == 0:
+            skipped_empty += 1
+            progress.set_postfix(
+                processed=processed,
+                empty=skipped_empty,
+                unlabeled=skipped_unlabeled,
+            )
+            continue
+
         filaments = select_catalog_segments(
             catalog,
             observation_dt,
             catalog_window_hours,
         )
         catalog_available = not filaments.empty
+        label_available = (
+            frame_key in label_frame_keys
+            if label_frame_keys is not None
+            else catalog_available
+        )
+        if training_only and not label_available:
+            skipped_unlabeled += 1
+            progress.set_postfix(
+                processed=processed,
+                empty=skipped_empty,
+                unlabeled=skipped_unlabeled,
+            )
+            continue
+
+        assert pd.notna(observation.hmi_path), f"Missing HMI path for {frame_key}"
+        assert pd.notna(observation.aia304_path), (
+            f"Missing AIA 304 path for {frame_key}"
+        )
+        aia_map, aia193 = prepare_fits(observation.fits_path)
+        _, aia304 = prepare_fits(observation.aia304_path)
+        assert candidate_mask.shape == aia193.shape == aia304.shape == aia_map.data.shape
+
+        hmi_los, hmi_radial, hmi_valid = compute_hmi_input(
+            aia_map,
+            observation.hmi_path,
+        )
         if catalog_available:
             filament_mask, rasterized, projected_segments = rasterize_catalog_segments(
                 aia_map,
@@ -593,10 +629,6 @@ def build_filament_feature_table(
             rasterized = 0
             projected_segments = np.empty((0, 4), dtype=np.float32)
 
-        labels, component_count = ndimage.label(
-            candidate_mask,
-            structure=np.ones((3, 3), dtype=int),
-        )
         for component_id in range(1, component_count + 1):
             component = labels == component_id
             summary = summarize_component(
@@ -629,5 +661,17 @@ def build_filament_feature_table(
                     **summary,
                 }
             )
+        processed += 1
+        progress.set_postfix(
+            processed=processed,
+            empty=skipped_empty,
+            unlabeled=skipped_unlabeled,
+        )
+
+    print(
+        "Feature collection: "
+        f"processed {processed} frames; skipped {skipped_empty} empty masks and "
+        f"{skipped_unlabeled} unlabeled frames."
+    )
 
     return pd.DataFrame(rows)
