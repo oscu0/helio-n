@@ -323,10 +323,7 @@ def build_catalog_overlap_frame(task):
         "kislovodsk_segments": len(kislovodsk_filaments),
         "magfilo_observations": len(magfilo_matches_for_frame),
         "magfilo_annotations": int(
-            sum(
-                match["observation"].filament_annotations
-                for match in magfilo_matches_for_frame
-            )
+            sum(match["filament_annotations"] for match in magfilo_matches_for_frame)
         ),
         "kislovodsk_contact_components": 0,
         "magfilo_direct_overlap_components": 0,
@@ -358,8 +355,7 @@ def build_catalog_overlap_frame(task):
     if magfilo_available:
         projected_magfilo = []
         for magfilo_match in magfilo_matches_for_frame:
-            magfilo_observation = magfilo_match["observation"]
-            fits_name = Path(magfilo_observation.url).stem + ".fits.fz"
+            fits_name = Path(magfilo_match["url"]).stem + ".fits.fz"
             assert fits_name in OVERLAP_MAGFILO_FITS, (
                 f"MAGFiLO FITS is not cached for {frame_key}: {fits_name}"
             )
@@ -367,7 +363,7 @@ def build_catalog_overlap_frame(task):
             projected_magfilo.extend(
                 project_magfilo_observation(
                     OVERLAP_MAGFILO_CATALOG,
-                    {"image_ids": magfilo_observation.image_ids},
+                    {"image_ids": magfilo_match["image_ids"]},
                     gong_map,
                     aia_map,
                 )
@@ -456,7 +452,16 @@ def build_catalog_overlap_table(
             pd.to_datetime(frame_key, format="%Y%m%d_%H%M"),
             catalog_window_hours,
         )
-        magfilo_matches_for_frame = magfilo_matches.get(frame_key, [])
+        magfilo_matches_for_frame = [
+            {
+                "url": match["observation"].url,
+                "image_ids": list(match["observation"].image_ids),
+                "filament_annotations": int(
+                    match["observation"].filament_annotations
+                ),
+            }
+            for match in magfilo_matches.get(frame_key, [])
+        ]
         if kislovodsk_filaments.empty and not magfilo_matches_for_frame:
             continue
         tasks.append(
