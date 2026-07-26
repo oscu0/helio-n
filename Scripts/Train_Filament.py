@@ -265,7 +265,7 @@ def main(argv=None):
     parser.add_argument("--features-parquet", type=Path)
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--validation-fraction", type=float, default=0.2)
-    parser.add_argument("--catalog-window-hours", type=float, default=12.0)
+    parser.add_argument("--catalog-window-hours", type=float, default=0.5)
     parser.add_argument("--catalog-support-radius-px", type=float, default=10.0)
     parser.add_argument(
         "--catalog-alignment-tolerance-deg",

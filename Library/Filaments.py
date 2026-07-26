@@ -629,7 +629,7 @@ def build_filament_feature_frame(task):
 def build_filament_feature_table(
     paths_df,
     catalog,
-    catalog_window_hours=12,
+    catalog_window_hours=0.5,
     catalog_support_radius_px=CATALOG_SUPPORT_RADIUS_PX,
     catalog_alignment_tolerance_deg=CATALOG_ALIGNMENT_TOLERANCE_DEG,
     catalog_min_aligned_centerline_px=CATALOG_MIN_ALIGNED_CENTERLINE_PX,
@@ -640,10 +640,14 @@ def build_filament_feature_table(
 ):
     rows = []
     assert workers >= 1, "workers must be positive"
-    assert paths_df[["fits_path", "mask_path"]].notna().all().all(), (
-        "Filament features require AIA 193 and mask paths for every frame."
+    required_paths = ["fits_path", "mask_path", "hmi_path", "aia304_path"]
+    missing_columns = set(required_paths).difference(paths_df.columns)
+    assert not missing_columns, (
+        "Filament feature paths are missing columns: "
+        f"{sorted(missing_columns)}"
     )
     skipped_empty = 0
+    skipped_missing_inputs = 0
     skipped_unlabeled = 0
     eligible = []
 
@@ -653,6 +657,16 @@ def build_filament_feature_table(
         desc="Filament frame filter",
     )
     for frame_key, observation in filter_progress:
+        if any(pd.isna(getattr(observation, column)) for column in required_paths):
+            skipped_missing_inputs += 1
+            filter_progress.set_postfix(
+                queued=len(eligible),
+                empty=skipped_empty,
+                missing_inputs=skipped_missing_inputs,
+                unlabeled=skipped_unlabeled,
+            )
+            continue
+
         observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
         candidate_mask = prepare_mask(observation.mask_path).astype(bool)
         labels, component_count = ndimage.label(
@@ -664,6 +678,7 @@ def build_filament_feature_table(
             filter_progress.set_postfix(
                 queued=len(eligible),
                 empty=skipped_empty,
+                missing_inputs=skipped_missing_inputs,
                 unlabeled=skipped_unlabeled,
             )
             continue
@@ -684,6 +699,7 @@ def build_filament_feature_table(
             filter_progress.set_postfix(
                 queued=len(eligible),
                 empty=skipped_empty,
+                missing_inputs=skipped_missing_inputs,
                 unlabeled=skipped_unlabeled,
             )
             continue
@@ -702,6 +718,7 @@ def build_filament_feature_table(
         filter_progress.set_postfix(
             queued=len(eligible),
             empty=skipped_empty,
+            missing_inputs=skipped_missing_inputs,
             unlabeled=skipped_unlabeled,
         )
 
@@ -709,6 +726,7 @@ def build_filament_feature_table(
         print(
             "Feature collection: "
             f"processed 0 frames; skipped {skipped_empty} empty masks and "
+            f"{skipped_missing_inputs} frames with missing inputs and "
             f"{skipped_unlabeled} unlabeled frames."
         )
         return pd.DataFrame(rows)
@@ -738,6 +756,7 @@ def build_filament_feature_table(
     print(
         "Feature collection: "
         f"processed {len(eligible)} frames; skipped {skipped_empty} empty masks and "
+        f"{skipped_missing_inputs} frames with missing inputs and "
         f"{skipped_unlabeled} unlabeled frames."
     )
 

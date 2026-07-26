@@ -123,7 +123,7 @@ def prepare_dataset(
     masks_root,
     hmi_root=None,
     aia304_root=None,
-    max_time_delta="29min",
+    max_time_delta="30min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
     hourly=True,
     start=None,
@@ -228,11 +228,13 @@ def prepare_dataset(
 
     if max_time_delta is not None:
         tolerance = pd.Timedelta(max_time_delta)
-        fits_align = df_fits[["key"]].copy()
-        fits_align["dt"] = to_dt(fits_align["key"])
-        fits_align = fits_align.dropna(subset=["dt"]).sort_values("dt")
+        # AIA 193 defines the feature-frame WCS. Associate every other input
+        # with that frame only when its nearest observation is within tolerance.
+        aia193_align = df_fits[["key"]].copy()
+        aia193_align["dt"] = to_dt(aia193_align["key"])
+        aia193_align = aia193_align.dropna(subset=["dt"]).sort_values("dt")
 
-        if not fits_align.empty:
+        if not aia193_align.empty:
 
             def fill_from_nearest(df_other, path_col):
                 nonlocal merged
@@ -245,7 +247,7 @@ def prepare_dataset(
                 if other_align.empty:
                     return
                 aligned = pd.merge_asof(
-                    fits_align,
+                    aia193_align,
                     other_align,
                     on="dt",
                     direction="nearest",
@@ -261,6 +263,7 @@ def prepare_dataset(
                 merged[path_col] = merged[path_col].fillna(merged[f"{path_col}_fuzzy"])
                 merged.drop(columns=[f"{path_col}_fuzzy"], inplace=True)
 
+            fill_from_nearest(df_masks, "mask_path")
             fill_from_nearest(df_hmi, "hmi_path")
             fill_from_nearest(df_aia304, "aia304_path")
 
