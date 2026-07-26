@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 import argparse
+import html
 import json
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 from scipy import ndimage
+from scipy.optimize import minimize
 import sunpy.map
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 from tqdm import tqdm
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -454,6 +459,118 @@ def build_catalog_label_table(
     return pd.DataFrame(records), len(label_frames)
 
 
+def render_magfilo_review(
+    paths_df,
+    magfilo_catalog,
+    magfilo_matches,
+    magfilo_fits,
+    output_dir,
+):
+    cases_dir = output_dir / "cases"
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    cards = []
+    for frame_key in tqdm(
+        sorted(magfilo_matches),
+        desc="MAGFiLO review",
+    ):
+        observation = paths_df.loc[frame_key]
+        aia_map, aia193 = prepare_fits(observation.fits_path)
+        candidate_mask = prepare_mask(observation.mask_path).astype(bool)
+        assert candidate_mask.shape == aia_map.data.shape
+
+        projected_magfilo = []
+        observation_times = []
+        annotation_count = 0
+        for magfilo_match in magfilo_matches[frame_key]:
+            magfilo_observation = magfilo_match["observation"]
+            fits_name = Path(magfilo_observation.url).stem + ".fits.fz"
+            assert fits_name in magfilo_fits, (
+                f"MAGFiLO FITS is not cached for {frame_key}: {fits_name}"
+            )
+            gong_map = sunpy.map.Map(magfilo_fits[fits_name])
+            projected_magfilo.extend(
+                project_magfilo_observation(
+                    magfilo_catalog,
+                    {"image_ids": magfilo_observation.image_ids},
+                    gong_map,
+                    aia_map,
+                )
+            )
+            observation_times.append(magfilo_observation.observation_dt)
+            annotation_count += magfilo_observation.filament_annotations
+
+        figure, axes = plt.subplots(1, 2, figsize=(16, 8), layout="constrained")
+        candidate_axis, overlay_axis = axes
+        for axis in axes:
+            axis.imshow(aia193, cmap="sdoaia193", origin="upper")
+            axis.set_axis_off()
+        candidate_axis.contour(
+            candidate_mask,
+            levels=[0.5],
+            colors=["cyan"],
+            linewidths=0.8,
+        )
+        candidate_axis.set_title("Dec1 candidate regions", fontsize=12)
+        overlay_axis.contour(
+            candidate_mask,
+            levels=[0.5],
+            colors=["cyan"],
+            linewidths=0.8,
+        )
+        for annotation in projected_magfilo:
+            for polygon in annotation["polygons"]:
+                overlay_axis.fill(
+                    polygon[:, 0],
+                    polygon[:, 1],
+                    facecolor="gold",
+                    edgecolor="gold",
+                    alpha=0.2,
+                    linewidth=0.7,
+                )
+            overlay_axis.plot(
+                annotation["spine"][:, 0],
+                annotation["spine"][:, 1],
+                color="white",
+                linewidth=1.1,
+            )
+        overlay_axis.set_title(
+            f"MAGFiLO: {annotation_count} annotations; cyan = candidates",
+            fontsize=12,
+        )
+        figure.suptitle(
+            f"{frame_key} | GONG "
+            f"{', '.join(time.strftime('%Y-%m-%d %H:%M') for time in observation_times)}",
+            fontsize=13,
+        )
+        image_name = f"{frame_key}.png"
+        figure.savefig(cases_dir / image_name, dpi=150)
+        plt.close(figure)
+        cards.append(
+            "<article>"
+            f"<a href='cases/{image_name}'><img src='cases/{image_name}' loading='lazy'></a>"
+            f"<h2>{html.escape(frame_key)}</h2>"
+            f"<p>{annotation_count} MAGFiLO annotations; "
+            f"{int(candidate_mask.sum())} candidate pixels.</p>"
+            "</article>"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "index.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>2017 MAGFiLO projection review</title>"
+        "<style>body{font-family:system-ui;margin:24px;background:#181818;color:#eee}"
+        "main{display:grid;grid-template-columns:repeat(auto-fit,minmax(500px,1fr));gap:18px}"
+        "article{background:#272727;padding:10px;border-radius:8px}"
+        "img{width:100%;height:auto}h1{margin-bottom:4px}h2{font-size:1rem;margin:8px 0 2px}"
+        "p{font-size:.86rem;margin:0;color:#ccc}</style></head><body>"
+        "<h1>2017 MAGFiLO projection review</h1>"
+        "<p>Left: exact Dec1 candidate-region contours. Right: the same contours "
+        "with projected MAGFiLO polygons (gold) and spines (white).</p>"
+        f"<main>{''.join(cards)}</main></body></html>"
+    )
+    return len(cards)
+
+
 def assign_training_labels(features):
     if "kislovodsk_available" not in features:
         features["kislovodsk_available"] = features["catalog_available"]
@@ -486,9 +603,9 @@ def main(argv=None):
     parser.add_argument("end", help="inclusive YYYYMMDD")
     parser.add_argument(
         "--mode",
-        choices=("train", "labels"),
+        choices=("train", "labels", "review"),
         default="train",
-        help="Run model training or build the Kislovodsk/MAGFiLO label table.",
+        help="Run model training, build labels, or render the MAGFiLO review gallery.",
     )
     parser.add_argument(
         "--paths-parquet",
@@ -502,6 +619,7 @@ def main(argv=None):
     )
     parser.add_argument("--labels-parquet", type=Path)
     parser.add_argument("--output-labels-parquet", type=Path)
+    parser.add_argument("--review-output-dir", type=Path)
     parser.add_argument(
         "--magfilo-catalog",
         type=Path,
@@ -590,7 +708,7 @@ def main(argv=None):
     features_path = args.features_parquet or output_dir / f"Features {stem}.parquet"
     model_path = args.model_path or output_dir / f"Classifier {stem}.json"
 
-    if args.mode == "labels":
+    if args.mode in ("labels", "review"):
         assert args.magfilo_window_hours > 0.0
         paths_df = pd.read_parquet(args.paths_parquet)
         start_key = f"{args.start}_0000"
@@ -616,12 +734,32 @@ def main(argv=None):
             observations,
             args.magfilo_window_hours,
         )
+        magfilo_fits = magfilo_fits_by_name(args.magfilo_fits_root)
+        if args.mode == "review":
+            review_dir = (
+                args.review_output_dir
+                or output_dir / f"MAGFiLO Review {stem}"
+            )
+            rendered = render_magfilo_review(
+                paths_df,
+                magfilo_catalog,
+                magfilo_matches,
+                magfilo_fits,
+                review_dir,
+            )
+            print(
+                f"Rendered {rendered} MAGFiLO-covered AIA frames; "
+                f"{unmatched_magfilo} observations were outside "
+                f"{args.magfilo_window_hours:g} h."
+            )
+            print(f"Saved {review_dir / 'index.html'}")
+            return 0
         labels, label_frames = build_catalog_label_table(
             paths_df,
             load_kislovodsk_catalog(args.catalog),
             magfilo_catalog,
             magfilo_matches,
-            magfilo_fits_by_name(args.magfilo_fits_root),
+            magfilo_fits,
             args.catalog_window_hours,
             args.catalog_support_radius_px,
             args.catalog_alignment_tolerance_deg,
