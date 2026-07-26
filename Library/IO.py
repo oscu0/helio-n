@@ -126,6 +126,8 @@ def prepare_dataset(
     max_time_delta="29min",
     out_parquet=paths["artifact_root"] + "Paths.parquet",
     hourly=True,
+    start=None,
+    end=None,
 ):
 
     def index(p):
@@ -169,6 +171,22 @@ def prepare_dataset(
     df_aia304 = pd.DataFrame(
         {"key": [index(p) for p in aia304_files], "aia304_path": aia304_files}
     )
+
+    if start is not None or end is not None:
+        assert start is not None and end is not None, (
+            "Dataset date filtering requires both start and end."
+        )
+        start_date = str(start)[:8]
+        end_date = str(end)[:8]
+        assert len(start_date) == 8 and len(end_date) == 8
+
+        def restrict_dates(df):
+            return df.loc[df["key"].str[:8].between(start_date, end_date)].copy()
+
+        df_fits = restrict_dates(df_fits)
+        df_masks = restrict_dates(df_masks)
+        df_hmi = restrict_dates(df_hmi)
+        df_aia304 = restrict_dates(df_aia304)
 
     # Report duplicates
     dup_fits = df_fits[df_fits.duplicated("key", keep=False)]
@@ -243,7 +261,6 @@ def prepare_dataset(
                 merged[path_col] = merged[path_col].fillna(merged[f"{path_col}_fuzzy"])
                 merged.drop(columns=[f"{path_col}_fuzzy"], inplace=True)
 
-            fill_from_nearest(df_masks, "mask_path")
             fill_from_nearest(df_hmi, "hmi_path")
             fill_from_nearest(df_aia304, "aia304_path")
 
