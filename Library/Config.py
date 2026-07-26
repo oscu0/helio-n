@@ -11,8 +11,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 with open(SCRIPT_DIR / "../Config/Machine.json", "r") as f:
     machines = json.load(f)
-    key = override_machine if override_machine else hostname
-    machine_config = machines.get(key, next(iter(machines.values())))
+    if override_machine:
+        assert override_machine in machines, (
+            f"Unknown MACHINE={override_machine!r}. "
+            f"Available machines: {', '.join(machines)}"
+        )
+        machine_config = machines[override_machine]
+    else:
+        machine_config = machines.get(hostname, next(iter(machines.values())))
 
     # Support simple inheritance for non-path settings
     if isinstance(machine_config, dict) and "inherits" in machine_config:
