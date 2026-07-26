@@ -42,8 +42,7 @@ CATALOG_DISTANCE_QUANTILE = 0.90
 CATALOG_SUPPORT_RADIUS_PX = 10.0
 CATALOG_ALIGNMENT_TOLERANCE_DEG = 30.0
 CATALOG_TANGENT_WINDOW_PX = 6.0
-CATALOG_MIN_ALIGNED_CENTERLINE_PX = 5
-CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION = 0.15
+CATALOG_MIN_SUPPORTED_CENTERLINE_PX = 5
 MAGFILO_SUPPORT_RADIUS_PX = 8.0
 MAGFILO_POLYGON_TOLERANCE_PX = 2.0
 MAGFILO_ALIGNMENT_TOLERANCE_DEG = 30.0
@@ -331,6 +330,22 @@ def compute_catalog_centerline_metrics(
     }
 
 
+def kislovodsk_is_filament(
+    metrics,
+    min_supported_centerline_px=CATALOG_MIN_SUPPORTED_CENTERLINE_PX,
+):
+    """Label a component from Kislovodsk's sparse centreline annotations.
+
+    Kislovodsk segments are short anchors rather than a complete traced spine.
+    Proximity support therefore defines the training label; tangent agreement is
+    retained as a diagnostic metric but must not reject an anchored filament.
+    """
+    return int(
+        metrics["catalog_supported_centerline_px"]
+        >= min_supported_centerline_px
+    )
+
+
 def compute_magfilo_centerline_metrics(
     component,
     spine_distance,
@@ -437,8 +452,7 @@ def summarize_component(
     projected_segments,
     catalog_support_radius_px,
     catalog_alignment_tolerance_deg,
-    catalog_min_aligned_centerline_px,
-    catalog_min_aligned_centerline_fraction,
+    catalog_min_supported_centerline_px,
 ):
     area = int(component.sum())
     centerline_length = int(skeletonize(component).sum())
@@ -494,11 +508,9 @@ def summarize_component(
         alignment_tolerance_deg=catalog_alignment_tolerance_deg,
     )
     is_filament = (
-        int(
-            centerline_metrics["catalog_aligned_centerline_px"]
-            >= catalog_min_aligned_centerline_px
-            and centerline_metrics["catalog_aligned_centerline_fraction"]
-            >= catalog_min_aligned_centerline_fraction
+        kislovodsk_is_filament(
+            centerline_metrics,
+            catalog_min_supported_centerline_px,
         )
         if catalog_available
         else np.nan
@@ -551,8 +563,7 @@ def build_filament_feature_frame(task):
         filaments,
         catalog_support_radius_px,
         catalog_alignment_tolerance_deg,
-        catalog_min_aligned_centerline_px,
-        catalog_min_aligned_centerline_fraction,
+        catalog_min_supported_centerline_px,
     ) = task
     observation_dt = pd.to_datetime(frame_key, format="%Y%m%d_%H%M")
     candidate_mask = prepare_mask(observation.mask_path).astype(bool)
@@ -605,8 +616,7 @@ def build_filament_feature_frame(task):
             projected_segments,
             catalog_support_radius_px,
             catalog_alignment_tolerance_deg,
-            catalog_min_aligned_centerline_px,
-            catalog_min_aligned_centerline_fraction,
+            catalog_min_supported_centerline_px,
         )
         rows.append(
             {
@@ -632,8 +642,7 @@ def build_filament_feature_table(
     catalog_window_hours=0.5,
     catalog_support_radius_px=CATALOG_SUPPORT_RADIUS_PX,
     catalog_alignment_tolerance_deg=CATALOG_ALIGNMENT_TOLERANCE_DEG,
-    catalog_min_aligned_centerline_px=CATALOG_MIN_ALIGNED_CENTERLINE_PX,
-    catalog_min_aligned_centerline_fraction=CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
+    catalog_min_supported_centerline_px=CATALOG_MIN_SUPPORTED_CENTERLINE_PX,
     training_only=False,
     label_frame_keys=None,
     workers=1,
@@ -711,8 +720,7 @@ def build_filament_feature_table(
                 filaments,
                 catalog_support_radius_px,
                 catalog_alignment_tolerance_deg,
-                catalog_min_aligned_centerline_px,
-                catalog_min_aligned_centerline_fraction,
+                catalog_min_supported_centerline_px,
             )
         )
         filter_progress.set_postfix(

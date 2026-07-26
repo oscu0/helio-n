@@ -25,8 +25,7 @@ from Library.Config import filament_feature_workers, paths
 from Library.Filaments import (
     CATALOG_ALIGNMENT_TOLERANCE_DEG,
     CATALOG_DISTANCE_QUANTILE,
-    CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
-    CATALOG_MIN_ALIGNED_CENTERLINE_PX,
+    CATALOG_MIN_SUPPORTED_CENTERLINE_PX,
     FEATURE_COLUMNS,
     MAGFILO_ALIGNMENT_TOLERANCE_DEG,
     MAGFILO_MIN_ALIGNED_CENTERLINE_FRACTION,
@@ -36,6 +35,7 @@ from Library.Filaments import (
     build_filament_feature_table,
     compute_catalog_centerline_metrics,
     compute_magfilo_centerline_metrics,
+    kislovodsk_is_filament,
     load_kislovodsk_catalog,
     magfilo_is_filament,
     rasterize_catalog_segments,
@@ -516,8 +516,7 @@ def build_catalog_label_table(
     catalog_window_hours,
     catalog_support_radius_px,
     catalog_alignment_tolerance_deg,
-    catalog_min_aligned_centerline_px,
-    catalog_min_aligned_centerline_fraction,
+    catalog_min_supported_centerline_px,
     magfilo_support_radius_px,
     magfilo_polygon_tolerance_px,
     magfilo_alignment_tolerance_deg,
@@ -638,13 +637,9 @@ def build_catalog_label_table(
                     "component_id": component_id,
                     "kislovodsk_available": kislovodsk_available,
                     "kislovodsk_is_filament": (
-                        int(
-                            kislovodsk_metrics["catalog_aligned_centerline_px"]
-                            >= catalog_min_aligned_centerline_px
-                            and kislovodsk_metrics[
-                                "catalog_aligned_centerline_fraction"
-                            ]
-                            >= catalog_min_aligned_centerline_fraction
+                        kislovodsk_is_filament(
+                            kislovodsk_metrics,
+                            catalog_min_supported_centerline_px,
                         )
                         if kislovodsk_available
                         else np.nan
@@ -874,14 +869,9 @@ def main(argv=None):
         default=CATALOG_ALIGNMENT_TOLERANCE_DEG,
     )
     parser.add_argument(
-        "--catalog-min-aligned-centerline-px",
+        "--catalog-min-supported-centerline-px",
         type=int,
-        default=CATALOG_MIN_ALIGNED_CENTERLINE_PX,
-    )
-    parser.add_argument(
-        "--catalog-min-aligned-centerline-fraction",
-        type=float,
-        default=CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION,
+        default=CATALOG_MIN_SUPPORTED_CENTERLINE_PX,
     )
     parser.add_argument(
         "--magfilo-support-radius-px",
@@ -1059,8 +1049,7 @@ def main(argv=None):
             args.catalog_window_hours,
             args.catalog_support_radius_px,
             args.catalog_alignment_tolerance_deg,
-            args.catalog_min_aligned_centerline_px,
-            args.catalog_min_aligned_centerline_fraction,
+            args.catalog_min_supported_centerline_px,
             args.magfilo_support_radius_px,
             args.magfilo_polygon_tolerance_px,
             args.magfilo_alignment_tolerance_deg,
@@ -1115,11 +1104,8 @@ def main(argv=None):
             catalog_window_hours=args.catalog_window_hours,
             catalog_support_radius_px=args.catalog_support_radius_px,
             catalog_alignment_tolerance_deg=args.catalog_alignment_tolerance_deg,
-            catalog_min_aligned_centerline_px=(
-                args.catalog_min_aligned_centerline_px
-            ),
-            catalog_min_aligned_centerline_fraction=(
-                args.catalog_min_aligned_centerline_fraction
+            catalog_min_supported_centerline_px=(
+                args.catalog_min_supported_centerline_px
             ),
             training_only=args.training_only,
             label_frame_keys=label_frame_keys,
@@ -1134,14 +1120,8 @@ def main(argv=None):
         features["catalog_available"] = True
     catalog_covered = features["catalog_available"].fillna(False).astype(bool)
     features.loc[catalog_covered, "is_filament"] = (
-        (
-            features.loc[catalog_covered, "catalog_aligned_centerline_px"]
-            >= args.catalog_min_aligned_centerline_px
-        )
-        & (
-            features.loc[catalog_covered, "catalog_aligned_centerline_fraction"]
-            >= args.catalog_min_aligned_centerline_fraction
-        )
+        features.loc[catalog_covered, "catalog_supported_centerline_px"]
+        >= args.catalog_min_supported_centerline_px
     ).astype(int)
     features.loc[~catalog_covered, "is_filament"] = np.nan
 
@@ -1206,11 +1186,8 @@ def main(argv=None):
             "catalog_support_radius_px": args.catalog_support_radius_px,
             "catalog_alignment_tolerance_deg": args.catalog_alignment_tolerance_deg,
             "catalog_distance_quantile": CATALOG_DISTANCE_QUANTILE,
-            "catalog_min_aligned_centerline_px": (
-                args.catalog_min_aligned_centerline_px
-            ),
-            "catalog_min_aligned_centerline_fraction": (
-                args.catalog_min_aligned_centerline_fraction
+            "catalog_min_supported_centerline_px": (
+                args.catalog_min_supported_centerline_px
             ),
             "feature_columns": FEATURE_COLUMNS,
             "optimizer_iterations": int(optimizer.nit),
