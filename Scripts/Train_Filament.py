@@ -9,6 +9,7 @@ import pandas as pd
 from scipy.optimize import minimize
 from scipy import ndimage
 import sunpy.map
+from tqdm import tqdm
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
@@ -302,7 +303,10 @@ def build_catalog_label_table(
             label_frames.append((frame_key, kislovodsk_filaments))
 
     records = []
-    for frame_key, kislovodsk_filaments in label_frames:
+    for frame_key, kislovodsk_filaments in tqdm(
+        label_frames,
+        desc="Catalog labels",
+    ):
         observation = paths_df.loc[frame_key]
         assert pd.notna(observation.fits_path), f"Missing AIA 193 path for {frame_key}"
         assert pd.notna(observation.mask_path), f"Missing mask path for {frame_key}"
