@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -14,6 +15,7 @@ from Library.SW.Ballistic import (  # noqa: E402
     init_accumulators,
     postprocess_max_field,
     prepare_seed_inputs,
+    propagate_phi_targets,
     run_bulk_propagation,
 )
 from Library.Paths import data_path, resolve_repo_path  # noqa: E402
@@ -40,6 +42,7 @@ from Library.SW.Inputs import (  # noqa: E402
 from Library.SW.Visualization import (  # noqa: E402
     build_satellite_comparison_frame,
     export_polar_animation,
+    find_phi_index,
 )
 
 
@@ -90,6 +93,14 @@ def parse_args(argv):
         help="Skip MP4 export.",
     )
     parser.add_argument(
+        "--targets-only",
+        action="store_true",
+        help=(
+            "Propagate only full-grid longitude bins sampled by Earth and "
+            "STEREO-A. Requires --skip-animation and preserves their time series."
+        ),
+    )
+    parser.add_argument(
         "--skip-parquet",
         action="store_true",
         help="Skip satellite-series and reproduction parquet exports.",
@@ -138,6 +149,10 @@ def parse_args(argv):
 
 def main(argv):
     args = parse_args(argv)
+    assert not args.targets_only or args.skip_animation, (
+        "--targets-only requires --skip-animation because it does not build "
+        "the full longitude grid needed by the polar animation."
+    )
     start_dt = pd.Timestamp(args.start)
     end_dt = pd.Timestamp(args.end)
     assert start_dt < end_dt, (
@@ -196,24 +211,131 @@ def main(argv):
     rotation = compute_rotation_state(
         phi_step_minutes=ballistic["phi_step_minutes"],
     )
-    grid = build_grid_axes(
-        sim_start=prepared["sim_start"],
-        sim_end=prepared["sim_end"],
-        time_freq=time_freq,
-        phi_step=rotation.phi_step,
-        r0=ballistic["r0"],
-        r_max=ballistic["r_max"],
-        r_step=ballistic["r_step"],
-        dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
-        memory_guard_enabled=ballistic["memory_guard_enabled"],
+    simulation_time_axis = pd.date_range(
+        prepared["sim_start"],
+        prepared["sim_end"],
+        freq=time_freq,
     )
-    transport = build_transport_state(
-        time_axis=grid.time_axis,
-        phi_axis=grid.phi_axis,
-        rotation_state=rotation,
-        horizon_hours=ballistic["horizon_hours"],
-        time_step_hours=time_step_hours,
+    satellite_frames = {
+        "ace_earth": load_ace_earth_frame(),
+        "stereo_a": load_stereo_a_frame(
+            time_axis=simulation_time_axis,
+            time_freq=time_freq,
+        ),
+    }
+    df_v_run = (
+        prepared["df_v"]
+        .loc[
+            (prepared["df_v"].index >= simulation_time_axis.min())
+            & (prepared["df_v"].index <= simulation_time_axis.max())
+        ]
+        .copy()
     )
+
+    if args.targets_only:
+        full_phi_axis = np.arange(
+            0.0,
+            360.0,
+            rotation.phi_step,
+            dtype=float,
+        )
+        stereo_phi = (
+            satellite_frames["stereo_a"]["phi_target"]
+            .interpolate(method="time")
+            .ffill()
+            .bfill()
+            .to_numpy(dtype=float)
+        )
+        target_phi_indices = {
+            find_phi_index(full_phi_axis, ballistic["earth_phi_target"])
+        }
+        target_phi_indices.update(
+            find_phi_index(full_phi_axis, value)
+            for value in stereo_phi[np.isfinite(stereo_phi)]
+        )
+        target_phi_values = full_phi_axis[sorted(target_phi_indices)]
+        print(
+            "Target-only propagation:",
+            len(target_phi_values),
+            "/",
+            len(full_phi_axis),
+            "full-grid longitude bins",
+        )
+        grid, transport, accumulators, stats = propagate_phi_targets(
+            df_v_run=df_v_run,
+            sim_start=prepared["sim_start"],
+            sim_end=prepared["sim_end"],
+            time_freq=time_freq,
+            rotation_state=rotation,
+            r0=ballistic["r0"],
+            r_max=ballistic["r_max"],
+            r_step=ballistic["r_step"],
+            dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
+            memory_guard_enabled=ballistic["memory_guard_enabled"],
+            horizon_hours=ballistic["horizon_hours"],
+            time_step_hours=time_step_hours,
+            max_seed_batch=runtime["max_seed_batch"],
+            phi_targets=target_phi_values,
+        )
+    else:
+        grid = build_grid_axes(
+            sim_start=prepared["sim_start"],
+            sim_end=prepared["sim_end"],
+            time_freq=time_freq,
+            phi_step=rotation.phi_step,
+            r0=ballistic["r0"],
+            r_max=ballistic["r_max"],
+            r_step=ballistic["r_step"],
+            dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
+            memory_guard_enabled=ballistic["memory_guard_enabled"],
+        )
+        transport = build_transport_state(
+            time_axis=grid.time_axis,
+            phi_axis=grid.phi_axis,
+            rotation_state=rotation,
+            horizon_hours=ballistic["horizon_hours"],
+            time_step_hours=time_step_hours,
+        )
+        accumulators = init_accumulators(
+            n_t=len(grid.time_axis),
+            n_p=len(grid.phi_axis),
+            n_r=len(grid.r_axis),
+        )
+        (
+            seed_vals,
+            v_prev,
+            v_next,
+            seed_t_idx,
+            seed_cr_idx_arr,
+            seed_r_idx,
+        ) = prepare_seed_inputs(
+            df_v_run=df_v_run,
+            cr_steps=transport.cr_steps,
+            horizon_steps=transport.horizon_steps,
+            time_freq=time_freq,
+            t0_ref=transport.t0_ref,
+            time_step_hours=time_step_hours,
+            r_kernel_scale=transport.r_kernel_scale,
+            r0=ballistic["r0"],
+            r_axis=grid.r_axis,
+        )
+        stats = run_bulk_propagation(
+            seed_vals=seed_vals,
+            v_prev=v_prev,
+            v_next=v_next,
+            seed_t_idx=seed_t_idx,
+            seed_cr_idx_arr=seed_cr_idx_arr,
+            seed_r_idx=seed_r_idx,
+            h_step_idx=transport.h_step_idx,
+            phi_delay_offsets=transport.phi_delay_offsets,
+            phi_delay_alpha=transport.phi_delay_alpha,
+            n_t=len(grid.time_axis),
+            n_p=len(grid.phi_axis),
+            n_r=len(grid.r_axis),
+            V_accum_max=accumulators.V_accum_max,
+            cr_flat=accumulators.cr_flat,
+            max_seed_batch=runtime["max_seed_batch"],
+        )
     if args.stereo_next_cr:
         requested_time_axis = pd.date_range(
             start_dt,
@@ -237,54 +359,6 @@ def main(argv):
             input_end_dt,
         )
 
-    df_v_run = (
-        prepared["df_v"]
-        .loc[
-            (prepared["df_v"].index >= grid.time_axis.min())
-            & (prepared["df_v"].index <= grid.time_axis.max())
-        ]
-        .copy()
-    )
-    accumulators = init_accumulators(
-        n_t=len(grid.time_axis),
-        n_p=len(grid.phi_axis),
-        n_r=len(grid.r_axis),
-    )
-    (
-        seed_vals,
-        v_prev,
-        v_next,
-        seed_t_idx,
-        seed_cr_idx_arr,
-        seed_r_idx,
-    ) = prepare_seed_inputs(
-        df_v_run=df_v_run,
-        cr_steps=transport.cr_steps,
-        horizon_steps=transport.horizon_steps,
-        time_freq=time_freq,
-        t0_ref=transport.t0_ref,
-        time_step_hours=time_step_hours,
-        r_kernel_scale=transport.r_kernel_scale,
-        r0=ballistic["r0"],
-        r_axis=grid.r_axis,
-    )
-    stats = run_bulk_propagation(
-        seed_vals=seed_vals,
-        v_prev=v_prev,
-        v_next=v_next,
-        seed_t_idx=seed_t_idx,
-        seed_cr_idx_arr=seed_cr_idx_arr,
-        seed_r_idx=seed_r_idx,
-        h_step_idx=transport.h_step_idx,
-        phi_delay_offsets=transport.phi_delay_offsets,
-        phi_delay_alpha=transport.phi_delay_alpha,
-        n_t=len(grid.time_axis),
-        n_p=len(grid.phi_axis),
-        n_r=len(grid.r_axis),
-        V_accum_max=accumulators.V_accum_max,
-        cr_flat=accumulators.cr_flat,
-        max_seed_batch=runtime["max_seed_batch"],
-    )
     print(
         "Propagation runtime:",
         f"{stats.prop_seconds:.2f}s",
@@ -336,13 +410,6 @@ def main(argv):
             "r_target": ballistic["earth_r_target"],
         },
     ]
-    satellite_frames = {
-        "ace_earth": load_ace_earth_frame(),
-        "stereo_a": load_stereo_a_frame(
-            time_axis=grid.time_axis,
-            time_freq=time_freq,
-        ),
-    }
     satellite_swx_frames = {
         "ace_earth": build_ace_earth_swx_frame(prepared["sdo_input_df"])
     }
