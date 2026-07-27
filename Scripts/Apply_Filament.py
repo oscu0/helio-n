@@ -29,12 +29,20 @@ def sigmoid(values):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Remove classifier-positive components from IDL final masks.",
+        description="Remove classifier-positive or catalog-contact components from IDL masks.",
     )
     parser.add_argument("start", help="inclusive YYYYMMDD")
     parser.add_argument("end", help="inclusive YYYYMMDD")
-    parser.add_argument("--model-path", type=Path, required=True)
-    parser.add_argument("--features-parquet", type=Path, required=True)
+    selection_source = parser.add_mutually_exclusive_group(required=True)
+    selection_source.add_argument("--model-path", type=Path)
+    selection_source.add_argument("--contacts-parquet", type=Path)
+    parser.add_argument("--features-parquet", type=Path)
+    parser.add_argument(
+        "--min-kislovodsk-supported-centerline-px",
+        type=int,
+        default=1,
+        help="Minimum Kislovodsk-supported skeleton pixels for contact removal.",
+    )
     parser.add_argument(
         "--paths-parquet",
         type=Path,
@@ -54,40 +62,73 @@ def main(argv=None):
     paths_df = pd.read_parquet(args.paths_parquet).loc[start_key:end_key].copy()
     assert not paths_df.empty, "No observations in the requested interval."
 
-    features = pd.read_parquet(args.features_parquet)
-    features = features[
-        (features["frame_key"] >= start_key) & (features["frame_key"] <= end_key)
-    ].copy()
-    assert not features.empty, "No component features in the requested interval."
+    if args.contacts_parquet is not None:
+        assert args.features_parquet is None, (
+            "--features-parquet is only valid with --model-path"
+        )
+        contacts = pd.read_parquet(args.contacts_parquet)
+        required = {
+            "frame_key",
+            "component_id",
+            "kislovodsk_supported_centerline_px",
+        }
+        missing = required.difference(contacts.columns)
+        assert not missing, f"Contact table is missing columns: {sorted(missing)}"
+        contacts = contacts[
+            (contacts["frame_key"] >= start_key)
+            & (contacts["frame_key"] <= end_key)
+            & (
+                contacts["kislovodsk_supported_centerline_px"]
+                >= args.min_kislovodsk_supported_centerline_px
+            )
+        ].copy()
+        contacts_by_frame = {
+            frame_key: frame_contacts
+            for frame_key, frame_contacts in contacts.groupby("frame_key")
+        }
+        assert set(contacts_by_frame).issubset(paths_df.index), (
+            "Contact table contains frames absent from the supplied Paths parquet."
+        )
+        removal_source = "kislovodsk-contact"
+    else:
+        assert args.features_parquet is not None, (
+            "--features-parquet is required with --model-path"
+        )
+        features = pd.read_parquet(args.features_parquet)
+        features = features[
+            (features["frame_key"] >= start_key) & (features["frame_key"] <= end_key)
+        ].copy()
+        assert not features.empty, "No component features in the requested interval."
 
-    model = json.loads(args.model_path.read_text())
-    assert model["model_type"] == "l2_logistic_regression"
-    assert model["feature_columns"] == FEATURE_COLUMNS
-    medians = pd.Series(model["feature_medians"])[FEATURE_COLUMNS]
-    means = pd.Series(model["feature_means"])[FEATURE_COLUMNS]
-    scales = pd.Series(model["feature_scales"])[FEATURE_COLUMNS]
-    coefficients = pd.Series(model["coefficients"])[FEATURE_COLUMNS]
-    assert medians.notna().all()
-    assert means.notna().all()
-    assert scales.notna().all() and (scales > 0.0).all()
-    assert coefficients.notna().all()
-    probability_threshold = (
-        args.probability_threshold
-        if args.probability_threshold is not None
-        else float(model["probability_threshold"])
-    )
+        model = json.loads(args.model_path.read_text())
+        assert model["model_type"] == "l2_logistic_regression"
+        assert model["feature_columns"] == FEATURE_COLUMNS
+        medians = pd.Series(model["feature_medians"])[FEATURE_COLUMNS]
+        means = pd.Series(model["feature_means"])[FEATURE_COLUMNS]
+        scales = pd.Series(model["feature_scales"])[FEATURE_COLUMNS]
+        coefficients = pd.Series(model["coefficients"])[FEATURE_COLUMNS]
+        assert medians.notna().all()
+        assert means.notna().all()
+        assert scales.notna().all() and (scales > 0.0).all()
+        assert coefficients.notna().all()
+        probability_threshold = (
+            args.probability_threshold
+            if args.probability_threshold is not None
+            else float(model["probability_threshold"])
+        )
 
-    feature_values = features[FEATURE_COLUMNS].fillna(medians)
-    standardized = (
-        (feature_values - means) / scales
-    ).to_numpy(dtype=np.float64)
-    features["filament_probability"] = sigmoid(
-        standardized @ coefficients.to_numpy(dtype=np.float64)
-        + float(model["intercept"])
-    )
-    features["remove_component"] = (
-        features["filament_probability"] >= probability_threshold
-    )
+        feature_values = features[FEATURE_COLUMNS].fillna(medians)
+        standardized = (
+            (feature_values - means) / scales
+        ).to_numpy(dtype=np.float64)
+        features["filament_probability"] = sigmoid(
+            standardized @ coefficients.to_numpy(dtype=np.float64)
+            + float(model["intercept"])
+        )
+        features["remove_component"] = (
+            features["filament_probability"] >= probability_threshold
+        )
+        removal_source = "classifier"
 
     output_rows = []
     filamentless_paths = paths_df.copy()
@@ -103,18 +144,37 @@ def main(argv=None):
             mask,
             structure=np.ones((3, 3), dtype=int),
         )
-        frame_features = features[features["frame_key"] == frame_key]
         expected_components = set(range(1, component_count + 1))
-        actual_components = set(frame_features["component_id"].astype(int))
-        assert actual_components == expected_components, (
-            f"{frame_key}: feature components {sorted(actual_components)} do not match "
-            f"mask components {sorted(expected_components)}"
-        )
-
-        remove_ids = frame_features.loc[
-            frame_features["remove_component"],
-            "component_id",
-        ].to_numpy(dtype=int)
+        if args.contacts_parquet is not None:
+            frame_contacts = contacts_by_frame.get(frame_key)
+            remove_ids = (
+                frame_contacts["component_id"].drop_duplicates().to_numpy(dtype=int)
+                if frame_contacts is not None
+                else np.empty(0, dtype=int)
+            )
+            assert set(remove_ids).issubset(expected_components), (
+                f"{frame_key}: contact components {sorted(remove_ids)} do not match "
+                f"mask components {sorted(expected_components)}"
+            )
+            max_probability = np.nan
+            max_supported_centerline_px = (
+                int(frame_contacts["kislovodsk_supported_centerline_px"].max())
+                if frame_contacts is not None
+                else 0
+            )
+        else:
+            frame_features = features[features["frame_key"] == frame_key]
+            actual_components = set(frame_features["component_id"].astype(int))
+            assert actual_components == expected_components, (
+                f"{frame_key}: feature components {sorted(actual_components)} do not match "
+                f"mask components {sorted(expected_components)}"
+            )
+            remove_ids = frame_features.loc[
+                frame_features["remove_component"],
+                "component_id",
+            ].to_numpy(dtype=int)
+            max_probability = float(frame_features["filament_probability"].max())
+            max_supported_centerline_px = np.nan
         cleaned = mask & ~np.isin(labels, remove_ids)
         year = frame_key[:4]
         month = frame_key[4:6]
@@ -140,11 +200,9 @@ def main(argv=None):
                 "components": component_count,
                 "components_removed": len(remove_ids),
                 "pixels_removed": int(mask.sum() - cleaned.sum()),
-                "max_filament_probability": (
-                    float(frame_features["filament_probability"].max())
-                    if not frame_features.empty
-                    else np.nan
-                ),
+                "removal_source": removal_source,
+                "max_filament_probability": max_probability,
+                "max_kislovodsk_supported_centerline_px": max_supported_centerline_px,
             }
         )
 

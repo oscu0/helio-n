@@ -301,6 +301,11 @@ def main(argv):
         default=Path(paths["artifact_root"]) / "Paths.parquet",
         help="Dataset index; filamentless inference writes a compatible Paths parquet.",
     )
+    parser.add_argument(
+        "--output-parquet",
+        type=Path,
+        help="Optional output path; use this for alternate mask experiments.",
+    )
     args = parser.parse_args(argv[1:])
     start = args.start
     end = args.end
@@ -349,10 +354,14 @@ def main(argv):
             out_df["dt"],
         )
 
-    out_dir = Path("./Outputs")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "" if args.area_mode == "projected" else f" {args.area_mode}"
-    out_path = out_dir / f"CH Areas {start}-{end}{suffix}.parquet"
+    if args.output_parquet is None:
+        out_dir = Path("./Outputs")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        suffix = "" if args.area_mode == "projected" else f" {args.area_mode}"
+        out_path = out_dir / f"CH Areas {start}-{end}{suffix}.parquet"
+    else:
+        out_path = args.output_parquet
+        out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path)
     print(f"Saved {out_path}")
     if args.validate_db:
