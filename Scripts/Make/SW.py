@@ -12,11 +12,8 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/helio_n_matplotlib")
 sys.path.append(str(ROOT_DIR))
 
 from Library.SW.Ballistic import (  # noqa: E402
-    init_accumulators,
     postprocess_max_field,
-    prepare_seed_inputs,
-    propagate_phi_targets,
-    run_bulk_propagation,
+    propagate_ballistic,
 )
 from Library.Paths import data_path, resolve_repo_path  # noqa: E402
 from Library.SW.Config import (  # noqa: E402
@@ -27,8 +24,7 @@ from Library.SW.Config import (  # noqa: E402
 )
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS  # noqa: E402
 from Library.SW.Coords import (  # noqa: E402
-    build_grid_axes,
-    build_transport_state,
+    build_centered_time_axis,
     compute_rotation_state,
 )
 from Library.SW.Inputs import (  # noqa: E402
@@ -167,14 +163,9 @@ def main(argv):
     slow_sw_patch_empirical = load_slow_sw_patch_spec()
     ballistic = load_ballistic_spec()
     runtime = load_sw_runtime_spec()
-    superresolution_enabled = bool(ballistic["superresolution_enabled"])
-    time_step_minutes = (
-        int(ballistic["superresolution_step_minutes"])
-        if superresolution_enabled
-        else int(ballistic["base_time_step_minutes"])
-    )
-    time_step_hours = float(time_step_minutes) / 60.0
-    time_freq = f"{int(time_step_minutes)}min"
+    output_step_minutes = int(ballistic["output_step_minutes"])
+    assert output_step_minutes > 0
+    output_frequency = f"{output_step_minutes}min"
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -203,24 +194,23 @@ def main(argv):
     prepared = build_model_input_series(
         sdo_input_df=df_sdo_sw,
         empirical=empirical,
-        superresolution_enabled=superresolution_enabled,
-        time_freq=time_freq,
+        output_step_minutes=output_step_minutes,
         simulation_pad_days=ballistic["simulation_pad_days"],
     )
 
     rotation = compute_rotation_state(
         phi_step_minutes=ballistic["phi_step_minutes"],
     )
-    simulation_time_axis = pd.date_range(
+    simulation_time_axis = build_centered_time_axis(
         prepared["sim_start"],
         prepared["sim_end"],
-        freq=time_freq,
+        output_step_minutes,
     )
     satellite_frames = {
         "ace_earth": load_ace_earth_frame(),
         "stereo_a": load_stereo_a_frame(
             time_axis=simulation_time_axis,
-            time_freq=time_freq,
+            time_freq=output_frequency,
         ),
     }
     df_v_run = (
@@ -232,6 +222,7 @@ def main(argv):
         .copy()
     )
 
+    phi_values = None
     if args.targets_only:
         full_phi_axis = np.arange(
             0.0,
@@ -261,90 +252,29 @@ def main(argv):
             len(full_phi_axis),
             "full-grid longitude bins",
         )
-        grid, transport, accumulators, stats = propagate_phi_targets(
-            df_v_run=df_v_run,
-            sim_start=prepared["sim_start"],
-            sim_end=prepared["sim_end"],
-            time_freq=time_freq,
-            rotation_state=rotation,
-            r0=ballistic["r0"],
-            r_max=ballistic["r_max"],
-            r_step=ballistic["r_step"],
-            dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
-            memory_guard_enabled=ballistic["memory_guard_enabled"],
-            horizon_hours=ballistic["horizon_hours"],
-            time_step_hours=time_step_hours,
-            max_seed_batch=runtime["max_seed_batch"],
-            phi_targets=target_phi_values,
-        )
-    else:
-        grid = build_grid_axes(
-            sim_start=prepared["sim_start"],
-            sim_end=prepared["sim_end"],
-            time_freq=time_freq,
-            phi_step=rotation.phi_step,
-            r0=ballistic["r0"],
-            r_max=ballistic["r_max"],
-            r_step=ballistic["r_step"],
-            dense_memory_budget_gb=runtime["dense_memory_budget_gb"],
-            memory_guard_enabled=ballistic["memory_guard_enabled"],
-        )
-        transport = build_transport_state(
-            time_axis=grid.time_axis,
-            phi_axis=grid.phi_axis,
-            rotation_state=rotation,
-            horizon_hours=ballistic["horizon_hours"],
-            time_step_hours=time_step_hours,
-        )
-        accumulators = init_accumulators(
-            n_t=len(grid.time_axis),
-            n_p=len(grid.phi_axis),
-            n_r=len(grid.r_axis),
-        )
-        (
-            seed_vals,
-            v_prev,
-            v_next,
-            seed_t_idx,
-            seed_cr_idx_arr,
-            seed_r_idx,
-        ) = prepare_seed_inputs(
-            df_v_run=df_v_run,
-            cr_steps=transport.cr_steps,
-            horizon_steps=transport.horizon_steps,
-            time_freq=time_freq,
-            t0_ref=transport.t0_ref,
-            time_step_hours=time_step_hours,
-            r_kernel_scale=transport.r_kernel_scale,
-            r0=ballistic["r0"],
-            r_axis=grid.r_axis,
-        )
-        stats = run_bulk_propagation(
-            seed_vals=seed_vals,
-            v_prev=v_prev,
-            v_next=v_next,
-            seed_t_idx=seed_t_idx,
-            seed_cr_idx_arr=seed_cr_idx_arr,
-            seed_r_idx=seed_r_idx,
-            h_step_idx=transport.h_step_idx,
-            phi_delay_offsets=transport.phi_delay_offsets,
-            phi_delay_alpha=transport.phi_delay_alpha,
-            n_t=len(grid.time_axis),
-            n_p=len(grid.phi_axis),
-            n_r=len(grid.r_axis),
-            V_accum_max=accumulators.V_accum_max,
-            cr_flat=accumulators.cr_flat,
-            max_seed_batch=runtime["max_seed_batch"],
-        )
+        phi_values = target_phi_values
+
+    grid, V_grid, stats = propagate_ballistic(
+        df_v_run=df_v_run,
+        sim_start=prepared["sim_start"],
+        sim_end=prepared["sim_end"],
+        output_step_minutes=output_step_minutes,
+        rotation_state=rotation,
+        r0=ballistic["r0"],
+        r_max=ballistic["r_max"],
+        r_step=ballistic["r_step"],
+        maximum_source_gap_hours=ballistic["maximum_input_gap_hours"],
+        phi_values=phi_values,
+    )
+    cr_steps = int(round(rotation.cr_time / (output_step_minutes * 60.0)))
     if args.stereo_next_cr:
-        requested_time_axis = pd.date_range(
+        requested_time_axis = build_centered_time_axis(
             start_dt,
             end_dt,
-            freq=time_freq,
-            inclusive="left",
+            output_step_minutes,
         )
         required_grid_end = requested_time_axis[-1] + pd.Timedelta(
-            minutes=time_step_minutes * transport.cr_steps
+            minutes=output_step_minutes * cr_steps
         )
         assert grid.time_axis.max() >= required_grid_end, (
             "The propagated grid does not cover the full STEREO next-CR "
@@ -354,7 +284,7 @@ def main(argv):
         print(
             "STEREO CH source: next Carrington rotation",
             "| grid offset steps:",
-            transport.cr_steps,
+            cr_steps,
             "| input end:",
             input_end_dt,
         )
@@ -362,28 +292,23 @@ def main(argv):
     print(
         "Propagation runtime:",
         f"{stats.prop_seconds:.2f}s",
-        "| seeds:",
-        stats.seeds_processed,
+        "| source points:",
+        stats.source_points,
+        "| source segments:",
+        stats.source_segments,
         "| filled cells:",
         stats.filled,
         "/",
         stats.total,
-        "| deposits:",
-        stats.deposits,
-        "| swept-skip deposits:",
-        stats.swept_skip_deposits,
-        "| avg deposits/seed:",
-        f"{stats.avg_deposits_per_seed:.1f}",
-        "| avg swept-skip deposits/seed:",
-        f"{stats.avg_swept_skip_deposits_per_seed:.1f}",
-        "| avg deposits/filled cell:",
-        f"{stats.avg_deposits_per_filled_cell:.2f}",
+        "| radial-bin visits:",
+        stats.radial_bin_visits,
+        "| base-plane cells:",
+        stats.base_plane_cells,
     )
 
     post = postprocess_max_field(
-        V_accum_max=accumulators.V_accum_max,
+        V_grid=V_grid,
         slow_sw_speed=empirical.slow_sw_speed(grid.time_axis),
-        post_chunk_t=runtime["post_chunk_t"],
     )
     print(
         "Post-max cells:",
@@ -417,7 +342,7 @@ def main(argv):
     if args.enlil:
         enlil_frames = load_enlil_prediction_frames(
             time_axis=grid.time_axis,
-            time_freq=time_freq,
+            time_freq=output_frequency,
             enlil_path=args.enlil_parquet
             if args.enlil_parquet is not None
             else None,
@@ -442,7 +367,7 @@ def main(argv):
             slow_sw_patch=args.slow_sw,
             draw_slow_sw=True,
             prediction_time_offset_steps=(
-                transport.cr_steps
+                cr_steps
                 if args.stereo_next_cr and sat_name == "stereo_a"
                 else 0
             ),
@@ -483,11 +408,9 @@ def main(argv):
             post_vlims_raw=post.max_vlims_raw,
             slow_sw_pred_mask=post.max_slow_sw_pred_mask,
             comparison_frames=comparison_frames,
-            time_step_minutes=time_step_minutes,
             slow_sw_speed=slow_sw_speed,
             draw_slow_sw=True,
             anim_fps=args.animation_fps,
-            anim_1h_mult=runtime["animation_1h_mult"],
             anim_dpi=(
                 runtime["animation_dpi"]
                 if args.animation_dpi is None
@@ -499,8 +422,6 @@ def main(argv):
             animation_out,
             "| frames:",
             int(animation_stats["frames"]),
-            "| stride:",
-            int(animation_stats["stride"]),
             "| fps:",
             int(animation_stats["fps"]),
         )

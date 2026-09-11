@@ -256,8 +256,11 @@ def load_stereo_a_frame(
         ],
     ).copy()
     stereo_a_df.index = pd.to_datetime(stereo_a_df.index, utc=True).tz_convert(None)
+    sampling_margin = pd.Timedelta(time_freq)
     stereo_a_df = stereo_a_df.loc[
-        pd.Timestamp(time_axis.min()) : pd.Timestamp(time_axis.max())
+        pd.Timestamp(time_axis.min())
+        - sampling_margin : pd.Timestamp(time_axis.max())
+        + sampling_margin
     ]
     stereo_a_df = stereo_a_df.rename(
         columns={
@@ -272,7 +275,14 @@ def load_stereo_a_frame(
     stereo_a_df["r_target"] = (
         stereo_a_df["r_target"] / EARTH_RADII_PER_SOLAR_RADIUS
     )
-    stereo_a_df = stereo_a_df.resample(time_freq).mean().reindex(time_axis)
+    stereo_a_df = stereo_a_df.resample(time_freq).mean()
+    interpolation_index = stereo_a_df.index.union(pd.DatetimeIndex(time_axis))
+    stereo_a_df = (
+        stereo_a_df.reindex(interpolation_index)
+        .sort_index()
+        .interpolate(method="time")
+        .reindex(time_axis)
+    )
     stereo_a_df.attrs["sat"] = DEFAULT_STEREO_A_SAT
     stereo_a_df.attrs["label"] = DEFAULT_STEREO_A_LABEL
     stereo_a_df.attrs["coord_frame"] = "HGE"
@@ -339,8 +349,7 @@ def load_enlil_prediction_frames(
 def build_model_input_series(
     sdo_input_df,
     empirical,
-    superresolution_enabled,
-    time_freq,
+    output_step_minutes,
     simulation_pad_days,
 ):
     required_cols = {"dt", "ch_relative_area"}
@@ -394,20 +403,13 @@ def build_model_input_series(
         .sort_index()
     )
 
-    if superresolution_enabled:
-        sr_index = pd.date_range(
-            df_v.index.min().floor(time_freq),
-            df_v.index.max().ceil(time_freq),
-            freq=time_freq,
-        )
-        df_v = df_v.reindex(sr_index).interpolate(method="time").ffill().bfill()
-        df_ch_area = df_ch_area.reindex(sr_index).ffill().bfill()
-        df_v.index.name = "time"
-        df_ch_area.index.name = "time"
+    df_v.index.name = "time"
+    df_ch_area.index.name = "time"
 
-    sim_start = df_v.index.min().floor(time_freq)
+    output_frequency = f"{int(output_step_minutes)}min"
+    sim_start = df_v.index.min().floor(output_frequency)
     sim_end = (df_v.index.max() + pd.Timedelta(days=float(simulation_pad_days))).ceil(
-        time_freq
+        output_frequency
     )
 
     return {

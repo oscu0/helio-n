@@ -825,23 +825,18 @@ def export_polar_animation(
     grid_raw,
     post_vlims_raw,
     slow_sw_pred_mask,
-    time_step_minutes,
     slow_sw_speed,
     comparison_frames,
     draw_slow_sw=True,
     cr_days=CARRINGTON_ROTATION_DAYS,
     anim_fps=30,
-    anim_1h_mult=1.0,
     anim_dpi=100,
     show_progress=True,
 ):
-    assert float(anim_1h_mult) > 0.0
     output_path = Path(anim_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    frame_interval_minutes = 60.0 * float(anim_1h_mult)
-    anim_stride = max(1, int(round(frame_interval_minutes / float(time_step_minutes))))
-    frame_idx = np.arange(0, len(time_axis), anim_stride, dtype=np.int32)
+    frame_idx = np.arange(len(time_axis), dtype=np.int32)
 
     n_sat_panels = max(1, len(comparison_frames))
     fig, polar_ax, sat_axes = _build_figure_axes(n_sat_panels, layout="horizontal")
@@ -881,7 +876,5 @@ def export_polar_animation(
     plt.close(fig)
     return {
         "frames": float(len(frame_idx)),
-        "stride": float(anim_stride),
-        "frame_interval_minutes": float(anim_stride * float(time_step_minutes)),
         "fps": float(anim_fps),
     }

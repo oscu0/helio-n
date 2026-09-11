@@ -12,11 +12,7 @@ PROJECT_ROOT = MODULE_DIR.parent.parent
 SW_CONFIG_DIR = PROJECT_ROOT / "Config" / "SW"
 
 SW_RUNTIME_DEFAULTS = {
-    "dense_memory_budget_gb": 10.0,
-    "max_seed_batch": 256,
-    "post_chunk_t": 128,
     "animation_dpi": 100,
-    "animation_1h_mult": 2.0,
 }
 
 
