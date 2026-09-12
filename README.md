@@ -70,6 +70,50 @@ python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> 
 - Add `synoptic` to read `Paths (Synoptic).parquet` instead of `Paths.parquet`.
 - Writes `Outputs/Artifacts/<host>/Stats/<architecture><date_range><postprocessing>_stats.parquet`.
 
+## Solar-wind CR archive
+
+```bash
+python Scripts/Make.py propagate_sw 2203 --input-source parquet \
+  --input-parquet "Outputs/Filaments/from-miracle/CH Areas 20180101-20181231 idl-exact.parquet" \
+  --archive-root Outputs/SW/Samples/Archive
+python Scripts/Make.py make_animation "2018-04-22 00:00" "2018-04-22 06:00" \
+  --archive-root Outputs/SW/Samples/Archive
+# The padded CR movie also needs CR 2202 and 2204:
+python Scripts/Make.py propagate_sw --start 2018-04-12 --end 2018-05-23 \
+  --input-source parquet \
+  --input-parquet "Outputs/Filaments/from-miracle/CH Areas 20180101-20181231 idl-exact.parquet" \
+  --archive-root Outputs/SW/Samples/Archive
+python Scripts/Make.py make_animation 2203 \
+  --archive-root Outputs/SW/Samples/Archive
+```
+
+The production `propagate_sw` default is SQL and writes to
+`Outputs/SW/Archive/CR####/`. Each CR contains rounded-core `series.parquet`,
+source and prepared-input Parquets, a compressed HDF5 cube with separate
+`speed` and `is_slow_wind` arrays, and a manifest. It refuses to overwrite an
+existing CR. Astronomical CR boundaries are rounded to the nearest output
+hour; the original bounds remain in each manifest. Adjacent products therefore
+concatenate on one hourly lattice. `Library.SW.Archive.load_cube` and
+`load_series` ingest arbitrary UTC ranges, including CR boundaries;
+`load_cube(..., context_frames=1)` includes the preceding final snapshot when
+an analysis starts at the next CR's first hourly centre. A single CR number
+to `make_animation` renders its core with ±7 days of padding by default
+(requiring adjacent CR archives); two timestamps render an arbitrary range.
+Each frame labels its owning CR. The movie command never runs propagation.
+`SW 4.ipynb` exercises the short sample end to end.
+
+`inputs.parquet` retains normalized source rows (including missing values) over
+the source guard; `prepared_inputs.parquet` adds the empirical speeds used to
+build launch knots. `series.parquet` keeps core-period CH-area/input speeds and
+standard satellite comparisons. `propagate_ballistic()` returns the speed cube;
+`cube_stats()` leaves it unchanged and computes the slow-wind mask, limits, and
+counts. The present mask is inferred by output-time speed equality, so a future
+time-varying slow-wind model will need source provenance carried by propagation.
+
+SQL input still uses upstream `sdo_fill_sw_193(...)`; the archive manifest
+marks that unresolved provenance question. The 2018 Parquet above is a local
+example artifact, not an included repository dataset.
+
 ## H-alpha-supervised filament removal
 
 The filament classifier operates on connected components of the exact IDL

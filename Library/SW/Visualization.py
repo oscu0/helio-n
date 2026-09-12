@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+from Library.SW.Archive import cr_for_time
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Stats import build_recurrent_series
 
@@ -425,7 +426,8 @@ def _build_polar_frame(grid_raw, slow_sw_pred_mask, t_idx, draw_slow_sw, frame_b
 
 
 def _format_title(current_time):
-    return f"Heliosphere at {pd.Timestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"
+    timestamp = pd.Timestamp(current_time)
+    return f"Heliosphere · CR{cr_for_time(timestamp)} · {timestamp:%Y-%m-%d %H:%M} UTC"
 
 
 def _compute_ch_age_days(phi_deg, speed_km_s, cr_days):

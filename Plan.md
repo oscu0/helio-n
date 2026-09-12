@@ -65,7 +65,7 @@ Continue growing the production suite with later stages:
 
 - keep `Tests/SW/reference.py` slow, small, and independent as the semantic
   oracle;
-- add archive round-trip, exact half-open CR concatenation, cross-CR context,
+- add archive round-trip, rounded half-open CR concatenation, cross-CR context,
   arbitrary-range loading, and renderer-from-archive tests in steps 3 and 4;
 - keep warm runtime, peak memory, archive size, and read speed in a benchmark
   report rather than brittle unit-test timing assertions.
@@ -87,9 +87,10 @@ For every output bin centred on its timestamp, retain the fastest valid root
 over `[centre - step/2, centre + step/2)`. This represents the continuously
 evolving boundary without manufacturing a sub-hourly launch series. The
 single 60-minute output cadence bounds temporal quantization to 30 minutes in
-either direction. Centre labels lie on one global UTC hourly lattice; each CR
-owns the labels within its exact half-open interval, so adjacent products
-concatenate without gaps or duplicate timestamps.
+either direction. Centre labels lie on one global UTC hourly lattice; round
+each astronomical CR boundary to the nearest output hour and assign each CR
+the half-open interval between consecutive rounded boundaries. Adjacent
+products then concatenate without gaps or duplicate timestamps.
 
 Compute the `(radius, time)` plane once at zero longitude. The configured
 longitudes are exact integer time shifts of that plane under the current grid,
@@ -177,11 +178,12 @@ Test one-hour, exactly-six-hour, over-six-hour, leading, and trailing gaps.
 
 ## 3. Refactor per-CR outputs and ingestion
 
-Use exact SunPy Carrington boundaries. Canonical products cover half-open core
-intervals:
+Compute astronomical Carrington boundaries with SunPy, then round each one
+mathematically to the nearest output hour. Canonical products cover half-open
+rounded-core intervals:
 
 ```text
-[CR start, next CR start)
+[rounded CR start, rounded next-CR start)
 ```
 
 Per-CR propagation runs are independent. A new propagation run does not consume
@@ -193,8 +195,8 @@ an ingestion/analysis operation only and does not modify or seed propagation.
 The final snapshot already lives in the preceding dense cube; no separate
 restart-parcel product is required.
 
-A roughly 40-day analysis or movie interval is assembled from adjacent exact
-CR products. Do not store overlapping padded cubes.
+A roughly 40-day analysis or movie interval is assembled from adjacent
+rounded-core CR products. Do not store overlapping padded cubes.
 
 ### Provisional archive
 
@@ -202,14 +204,15 @@ CR products. Do not store overlapping padded cubes.
 CR####/
     manifest.json
     inputs.parquet
+    prepared_inputs.parquet
     series.parquet
     cube.h5
-    movie.mp4
+index.parquet
 ```
 
 `manifest.json` records:
 
-- exact CR bounds and forecast/hindcast mode;
+- rounded ownership bounds, astronomical CR bounds, and forecast/hindcast mode;
 - model and schema versions;
 - time-bin convention and all coordinates with units;
 - configuration and code revision;
@@ -217,28 +220,30 @@ CR####/
 - interpolation policy and availability statistics;
 - neighboring CR identities.
 
-`inputs.parquet` retains the exact native and prepared input used for
-reproduction, including availability and interpolation provenance.
+`inputs.parquet` retains normalized source rows, including missing rows and
+their availability status. `prepared_inputs.parquet` retains the rows and
+empirical velocities actually used for propagation. SQL's upstream fill
+provenance remains the open question in step 2.
 
-`series.parquet` contains exact-core tabular products, including standard
+`series.parquet` contains rounded-core tabular products, including standard
 satellite predictions and comparison data. Adjacent files must concatenate
 without duplicated boundary timestamps.
 
 `cube.h5` provisionally stores the logical dense
-`speed[time, phi, r]` cube as chunked compressed `float32`. Before locking
+`speed[time, phi, r]` cube as chunked compressed `float32`, alongside a
+separate Boolean `is_slow_wind` cube. Before locking
 the format and chunk shape, compare HDF5 and Zarr on one representative CR for
 size, write time, arbitrary-window reads, animation reads, and extraction along
 a new satellite trajectory. The dense cube should not be flattened into a
 pandas table.
 
-`movie.mp4` is a derived convenience product and never an input to
-propagation.
+Movies are derived convenience products and never inputs to propagation.
 
 ### Ingestion interface
 
 Provide:
 
-- `load_series(start, end) -> DataFrame`, concatenating the required exact
+- `load_series(start, end) -> DataFrame`, concatenating the required rounded
   per-CR Parquets and slicing once;
 - `load_cube(start, end)`, reading only the required dense chunks and
   returning an array with named coordinates.
@@ -248,9 +253,14 @@ They must preserve missing values and expose input-quality provenance.
 
 ## 4. Separate animation export
 
-Propagation writes the archive and exits. A separate animation command:
+Replace the current combined `make sw` entry point with two explicit commands:
+`make propagate_sw` writes the propagation archive and exits, while
+`make_animation` renders from archived products. It accepts either a CR number
+for a core movie padded by default by seven days on both sides, or two UTC
+timestamps for an arbitrary half-open range. Every frame labels its owning CR.
+The animation command:
 
-1. requests an arbitrary date range from the archive loaders;
+1. resolves the requested CR or date range and requests it from the archive loaders;
 2. reads the required dense frames and tabular comparison data;
 3. renders without invoking propagation;
 4. optionally writes the movie into the relevant archive product directory.
@@ -286,8 +296,10 @@ rerunning valid rotations.
   add archive provenance when the archive schema lands.
 - `Library/SW/Archive.py`: add when producer, ingester, and renderer genuinely
   share archive logic.
-- `Scripts/Make/SW.py`: propagation and archive production only.
-- `Scripts/Make/SW_Animation.py`: independent arbitrary-range rendering.
+- `Scripts/Make/Propagate_SW.py` (`make propagate_sw`): replaces `make sw`;
+  propagation and archive production only.
+- `Scripts/Make/Make_Animation.py` (`make make_animation`): independent
+  padded-CR and arbitrary-range rendering from the archive.
 - `Library/SW/Visualization.py`: rendering only, with no propagation or
   archive discovery.
 - `Analysis/SW_Resolution_Snapshot.py`: retain old propagation methods only

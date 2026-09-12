@@ -6,7 +6,7 @@ import pandas as pd
 
 os.environ.setdefault("SUNPY_CONFIGDIR", "/tmp/helio_n_sunpy")
 
-from Library.SW.Ballistic import propagate_continuous_boundary
+from Library.SW.Ballistic import cube_stats, propagate_continuous_boundary
 from Library.SW.Constants import SOLAR_RADIUS_KM
 from Library.SW.Coords import build_centered_time_axis, compute_rotation_state
 from Tests.SW.reference import propagate_continuous_reference
@@ -31,6 +31,24 @@ def propagate(source, time_axis, phi_axis, radius_axis, maximum_gap_hours=6):
 
 
 class BallisticProductionTests(unittest.TestCase):
+    def test_cube_stats_does_not_replace_the_speed_cube(self):
+        speed = np.array(
+            [[[300.0, 350.0, np.nan]], [[310.0, 300.0, 450.0]]],
+            dtype=np.float32,
+        )
+        summary = cube_stats(speed, slow_sw_speed=[300.0, 310.0])
+        np.testing.assert_array_equal(
+            summary.slow_wind_mask,
+            [[[True, False, False]], [[True, False, False]]],
+        )
+        self.assertEqual(summary.speed_range, (300.0, 450.0))
+        self.assertEqual(summary.filled_cells, 5)
+        self.assertEqual(summary.slow_cells, 2)
+        self.assertEqual(summary.non_slow_cells, 3)
+        self.assertAlmostEqual(summary.non_slow_fraction_filled, 0.6)
+        self.assertFalse(hasattr(summary, "V_grid"))
+        self.assertTrue(np.isnan(speed[0, 0, 2]))
+
     def test_adjacent_intervals_share_one_center_lattice(self):
         start = pd.Timestamp("2020-01-01 00:10:00")
         boundary = start + pd.Timedelta(hours=3, minutes=10)

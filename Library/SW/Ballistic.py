@@ -24,12 +24,11 @@ class PropagationStats:
 
 
 @dataclass(frozen=True)
-class PostProcessingState:
-    """Max-only post-processing artifacts."""
+class CubeStats:
+    """Inferred slow-wind mask and summary of a propagated speed cube."""
 
-    V_grid: np.ndarray
-    max_slow_sw_pred_mask: np.ndarray
-    max_vlims_raw: tuple[float, float]
+    slow_wind_mask: np.ndarray
+    speed_range: tuple[float, float]
     filled_cells: int
     slow_cells: int
     non_slow_cells: int
@@ -399,34 +398,37 @@ def propagate_ballistic(
     return grid, V_grid, stats
 
 
-def postprocess_max_field(
-    V_grid,
+def cube_stats(
+    speed_cube,
     slow_sw_speed,
 ):
+    """Summarize without changing the cube.
+
+    The mask uses output-time speed equality, not launch-source provenance.
+    """
     slow_sw_values = np.asarray(slow_sw_speed, dtype=float)
     if slow_sw_values.ndim == 0:
-        slow_sw_values = np.full(V_grid.shape[0], float(slow_sw_values))
-    assert len(slow_sw_values) == V_grid.shape[0]
+        slow_sw_values = np.full(speed_cube.shape[0], float(slow_sw_values))
+    assert len(slow_sw_values) == speed_cube.shape[0]
 
-    slow_sw_pred_max = np.isclose(
-        V_grid,
+    slow_wind_mask = np.isclose(
+        speed_cube,
         slow_sw_values[:, None, None],
     )
 
-    if np.isfinite(V_grid).any():
-        vlims = (float(np.nanmin(V_grid)), float(np.nanmax(V_grid)))
+    if np.isfinite(speed_cube).any():
+        speed_range = (float(np.nanmin(speed_cube)), float(np.nanmax(speed_cube)))
     else:
-        vlims = (float("nan"), float("nan"))
-    filled_cells = int(np.count_nonzero(np.isfinite(V_grid)))
-    slow_cells = int(np.count_nonzero(slow_sw_pred_max))
+        speed_range = (float("nan"), float("nan"))
+    filled_cells = int(np.count_nonzero(np.isfinite(speed_cube)))
+    slow_cells = int(np.count_nonzero(slow_wind_mask))
     non_slow_cells = int(filled_cells - slow_cells)
     non_slow_fraction_filled = (
         float(non_slow_cells / filled_cells) if filled_cells else 0.0
     )
-    return PostProcessingState(
-        V_grid=V_grid,
-        max_slow_sw_pred_mask=slow_sw_pred_max,
-        max_vlims_raw=vlims,
+    return CubeStats(
+        slow_wind_mask=slow_wind_mask,
+        speed_range=speed_range,
         filled_cells=filled_cells,
         slow_cells=slow_cells,
         non_slow_cells=non_slow_cells,
