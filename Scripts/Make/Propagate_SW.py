@@ -121,8 +121,8 @@ def main(argv=None):
     cube_info = cube_stats(speed, empirical.slow_sw_speed(grid.time_axis))
     frequency = f"{step}min"
     satellites = {
-        "ace_earth": load_ace_earth_frame(),
-        "stereo_a": load_stereo_a_frame(grid.time_axis, frequency),
+        "ace_earth": (load_ace_earth_frame(), ballistic["earth_phi_target"]),
+        "stereo_a": (load_stereo_a_frame(grid.time_axis, frequency), 0.0),
     }
     swx = build_ace_earth_swx_frame(prepared["sdo_input_df"])
     enlil = (
@@ -133,12 +133,7 @@ def main(argv=None):
         if args.enlil else {}
     )
     comparisons = {}
-    for sat, label, default_phi in (
-        ("ace_earth", "ACE @ Earth", ballistic["earth_phi_target"]),
-        ("stereo_a", "STEREO-A", 0.0),
-    ):
-        frame = satellites[sat].copy()
-        frame.attrs["label"] = label
+    for sat, (frame, default_phi) in satellites.items():
         comparisons[sat] = build_satellite_comparison_frame(
             time_axis=grid.time_axis,
             phi_axis=grid.phi_axis,

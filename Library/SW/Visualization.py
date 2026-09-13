@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 
 from Library.SW.Archive import cr_for_time
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
+from Library.SW.Inputs import SATELLITE_MAX_SOURCE_GAP, interpolate_short_gaps
 from Library.SW.Stats import build_recurrent_series
 
 PREDICT_COLUMN = "v_predict"
@@ -70,12 +71,10 @@ def build_satellite_comparison_frame(
 
     target_frame = pd.DataFrame(index=pd.DatetimeIndex(time_axis))
     if df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
-        target_frame = target_frame.join(df_sat[["phi_target", "r_target"]], how="left")
-        target_frame[["phi_target", "r_target"]] = (
-            target_frame[["phi_target", "r_target"]]
-            .interpolate(method="time")
-            .ffill()
-            .bfill()
+        target_frame[["phi_target", "r_target"]] = interpolate_short_gaps(
+            df_sat[["phi_target", "r_target"]],
+            target_frame.index,
+            max_source_gap=SATELLITE_MAX_SOURCE_GAP,
         )
     else:
         target_frame["phi_target"] = float(phi_target)
@@ -418,6 +417,18 @@ def _build_satellite_plot_items(comparison_frames):
     return sat_items
 
 
+def select_satellite_frames(comparison_frames, satellites=None):
+    """Keep requested satellites, in plot order; None means all available."""
+    if satellites is None:
+        return comparison_frames
+    assert not isinstance(satellites, str), "Pass satellite IDs as a sequence, not a string"
+    requested = list(satellites)
+    assert len(requested) == len(set(requested)), "Duplicate satellite selection"
+    missing = set(requested) - set(comparison_frames)
+    assert not missing, f"Satellites absent from the comparison series: {sorted(missing)}"
+    return {name: comparison_frames[name] for name in requested}
+
+
 def _build_polar_frame(grid_raw, slow_sw_pred_mask, t_idx, draw_slow_sw, frame_buffer):
     np.copyto(frame_buffer, grid_raw[int(t_idx)].T)
     if not draw_slow_sw:
@@ -617,6 +628,12 @@ def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, wi
 
 def _build_figure_axes(n_sat_panels, layout):
     """Create figure and (polar_ax, sat_axes) for a layout."""
+    if n_sat_panels == 0:
+        fig = plt.figure(figsize=(8.8, 8.8))
+        polar_ax = fig.add_subplot(projection="polar")
+        fig.subplots_adjust(top=0.88, right=0.85, left=0.08, bottom=0.08)
+        return fig, polar_ax, []
+
     panel_height = 1.55
     if layout == "vertical":
         fig_height = max(10.0, 7.0 + 2.1 * n_sat_panels)
@@ -798,6 +815,7 @@ def plot_polar_snapshot(
     comparison_frames,
     draw_slow_sw=True,
     cr_days=CARRINGTON_ROTATION_DAYS,
+    satellites=None,
 ):
     current_time = pd.Timestamp(date_str)
     t_idx = int(pd.DatetimeIndex(time_axis).get_loc(current_time))
@@ -805,7 +823,8 @@ def plot_polar_snapshot(
         print(f"No data for {date_str} with current display settings")
         return
 
-    n_sat_panels = max(1, len(comparison_frames))
+    comparison_frames = select_satellite_frames(comparison_frames, satellites)
+    n_sat_panels = len(comparison_frames)
     fig, polar_ax, sat_axes = _build_figure_axes(n_sat_panels, layout="vertical")
     _build_polar_view(
         fig=fig, polar_ax=polar_ax, sat_axes=sat_axes,
@@ -834,13 +853,15 @@ def export_polar_animation(
     anim_fps=30,
     anim_dpi=100,
     show_progress=True,
+    satellites=None,
 ):
     output_path = Path(anim_outfile)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     frame_idx = np.arange(len(time_axis), dtype=np.int32)
 
-    n_sat_panels = max(1, len(comparison_frames))
+    comparison_frames = select_satellite_frames(comparison_frames, satellites)
+    n_sat_panels = len(comparison_frames)
     fig, polar_ax, sat_axes = _build_figure_axes(n_sat_panels, layout="horizontal")
     state = _build_polar_view(
         fig=fig, polar_ax=polar_ax, sat_axes=sat_axes,

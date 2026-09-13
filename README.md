@@ -100,7 +100,15 @@ an analysis starts at the next CR's first hourly centre. A single CR number
 to `make_animation` renders its core with ±7 days of padding by default
 (requiring adjacent CR archives); two timestamps render an arbitrary range.
 Each frame labels its owning CR. The movie command never runs propagation.
-`SW 4.ipynb` exercises the short sample end to end.
+`make_animation --satellites ace_earth,stereo_a` selects plotted spacecraft
+in that order; `--satellites none` produces a polar-only movie. By default it
+plots every spacecraft present in the archive. Selection removes both the
+polar marker and time-series panel, without changing archived comparisons.
+The direct `plot_polar_snapshot()` and `export_polar_animation()` calls accept
+the same IDs as a `satellites=[...]` argument (or `[]` for none).
+`SW 4.ipynb` runs a CR 2306 SQL sample through the library functions directly,
+with separate cells for inspecting source inputs, prepared inputs, and the
+in-memory cube. Its sample archive and animation omit satellite comparisons.
 
 `inputs.parquet` retains normalized source rows (including missing values) over
 the source guard; `prepared_inputs.parquet` adds the empirical speeds used to
@@ -109,6 +117,10 @@ standard satellite comparisons. `propagate_ballistic()` returns the speed cube;
 `cube_stats()` leaves it unchanged and computes the slow-wind mask, limits, and
 counts. The present mask is inferred by output-time speed equality, so a future
 time-varying slow-wind model will need source provenance carried by propagation.
+STEREO-A speed and position are interpolated only between nonempty sampled bins
+at most 6 hours apart; longer gaps remain missing. Comparison-frame position
+sampling obeys the same limit. Previously written CR archives are unchanged
+by this loader correction.
 
 SQL input still uses upstream `sdo_fill_sw_193(...)`; the archive manifest
 marks that unresolved provenance question. The 2018 Parquet above is a local

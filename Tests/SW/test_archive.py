@@ -11,7 +11,7 @@ import pandas as pd
 
 from Library.SW.Archive import cr_bounds, iter_crs, load_cr, load_cube, load_inputs, load_series, write_cr
 from Library.SW.Coords import build_centered_time_axis
-from Library.SW.Visualization import _format_title, build_satellite_comparison_frame
+from Library.SW.Visualization import _format_title, build_satellite_comparison_frame, select_satellite_frames
 
 
 class ArchiveTests(unittest.TestCase):
@@ -118,6 +118,36 @@ class ArchiveTests(unittest.TestCase):
             list(iter_crs(start.tz_localize("UTC"), end.tz_localize("UTC"))),
             [self.cr],
         )
+
+    def test_satellite_selection_is_generic_and_ordered(self):
+        frames = {name: pd.DataFrame() for name in ("ace_earth", "stereo_a", "solar_orbiter", "psp")}
+        self.assertEqual(
+            list(select_satellite_frames(frames, ["psp", "ace_earth"])),
+            ["psp", "ace_earth"],
+        )
+        self.assertEqual(select_satellite_frames(frames, []), {})
+        with self.assertRaisesRegex(AssertionError, "absent"):
+            select_satellite_frames(frames, ["unknown"])
+
+    def test_satellite_target_does_not_bridge_long_position_gaps(self):
+        start = pd.Timestamp("2018-01-01 00:00")
+        times = pd.date_range(start, periods=11, freq="1h")
+        positions = pd.DataFrame(
+            {"phi_target": [0.0, 20.0, 40.0], "r_target": [215.0] * 3},
+            index=times[[0, 2, 10]],
+        )
+        speed = np.full((len(times), 2, 2), 400.0, dtype=np.float32)
+        sampled = build_satellite_comparison_frame(
+            time_axis=times,
+            phi_axis=self.phi,
+            r_axis=self.radius,
+            grid_raw=speed,
+            slow_sw_pred_mask=np.zeros_like(speed, dtype=bool),
+            df_sat=positions,
+        )
+        self.assertTrue(np.isfinite(sampled.loc[times[1], "v_predict"]))
+        self.assertTrue(np.isnan(sampled.loc[times[3], "v_predict"]))
+        self.assertTrue(np.isnan(sampled.loc[times[3], "phi_target"]))
 
 
 if __name__ == "__main__":

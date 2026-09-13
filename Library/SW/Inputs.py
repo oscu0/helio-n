@@ -45,6 +45,7 @@ DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
 DEFAULT_STEREO_A_SAT = "stereo_a"
 DEFAULT_STEREO_A_LABEL = "STEREO-A"
 EARTH_RADII_PER_SOLAR_RADIUS = 109.0763707060096
+SATELLITE_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
 SATELLITE_FRAME_COLUMNS = [
     "v",
     "phi_target",
@@ -240,10 +241,31 @@ def load_ace_swx_frame(swx_path=DEFAULT_SWX_PARQUET_PATH):
     return frame
 
 
+def interpolate_short_gaps(frame, target_index, max_source_gap=SATELLITE_MAX_SOURCE_GAP):
+    """Interpolate each column only between observations at most max_source_gap apart."""
+    max_source_gap = pd.Timedelta(max_source_gap)
+    assert max_source_gap > pd.Timedelta(0)
+    source = frame.sort_index()
+    assert source.index.is_unique, "Satellite source timestamps must be unique"
+    target_index = pd.DatetimeIndex(target_index)
+    interpolation_index = source.index.union(target_index).sort_values()
+    source = source.reindex(interpolation_index)
+    interpolated = source.interpolate(method="time", limit_area="inside")
+    for column in source.columns:
+        observed_times = source.index[source[column].notna()]
+        source_times = pd.Series(observed_times, index=observed_times)
+        previous_time = source_times.reindex(interpolation_index).ffill()
+        next_time = source_times.reindex(interpolation_index).bfill()
+        bounded = (next_time - previous_time) <= max_source_gap
+        interpolated[column] = interpolated[column].where(bounded)
+    return interpolated.reindex(target_index)
+
+
 def load_stereo_a_frame(
     time_axis,
     time_freq,
     stereo_path=DEFAULT_STEREO_A_PARQUET_PATH,
+    max_source_gap=SATELLITE_MAX_SOURCE_GAP,
 ):
     stereo_path = resolve_repo_path(stereo_path)
     stereo_a_df = pd.read_parquet(
@@ -256,7 +278,7 @@ def load_stereo_a_frame(
         ],
     ).copy()
     stereo_a_df.index = pd.to_datetime(stereo_a_df.index, utc=True).tz_convert(None)
-    sampling_margin = pd.Timedelta(time_freq)
+    sampling_margin = max(pd.Timedelta(time_freq), pd.Timedelta(max_source_gap))
     stereo_a_df = stereo_a_df.loc[
         pd.Timestamp(time_axis.min())
         - sampling_margin : pd.Timestamp(time_axis.max())
@@ -276,13 +298,7 @@ def load_stereo_a_frame(
         stereo_a_df["r_target"] / EARTH_RADII_PER_SOLAR_RADIUS
     )
     stereo_a_df = stereo_a_df.resample(time_freq).mean()
-    interpolation_index = stereo_a_df.index.union(pd.DatetimeIndex(time_axis))
-    stereo_a_df = (
-        stereo_a_df.reindex(interpolation_index)
-        .sort_index()
-        .interpolate(method="time")
-        .reindex(time_axis)
-    )
+    stereo_a_df = interpolate_short_gaps(stereo_a_df, time_axis, max_source_gap)
     stereo_a_df.attrs["sat"] = DEFAULT_STEREO_A_SAT
     stereo_a_df.attrs["label"] = DEFAULT_STEREO_A_LABEL
     stereo_a_df.attrs["coord_frame"] = "HGE"

@@ -27,6 +27,10 @@ def main(argv=None):
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--dpi", type=int)
+    parser.add_argument(
+        "--satellites",
+        help="Comma-separated satellite IDs to plot, or 'none' for polar-only (default: all)",
+    )
     args = parser.parse_args(argv)
     assert args.fps > 0
     if args.end is None:
@@ -49,12 +53,20 @@ def main(argv=None):
     finite = speed[np.isfinite(speed)]
     assert len(finite) > 0, "No finite speeds in the requested animation range"
     comparison_frames = {}
-    satellite = series["satellite"]
-    for name in satellite.columns.get_level_values(0).unique():
-        frame = satellite[name].copy()
-        frame.attrs["sat"] = name
-        frame.attrs["label"] = {"ace_earth": "ACE @ Earth", "stereo_a": "STEREO-A"}.get(name, name)
-        comparison_frames[name] = frame
+    if "satellite" in series.columns.get_level_values(0):
+        satellite = series["satellite"]
+        for name in satellite.columns.get_level_values(0).unique():
+            frame = satellite[name].copy()
+            frame.attrs["sat"] = name
+            frame.attrs["label"] = {"ace_earth": "ACE @ Earth", "stereo_a": "STEREO-A"}.get(name, name)
+            comparison_frames[name] = frame
+    if args.satellites is None:
+        selected_satellites = None
+    elif args.satellites == "none":
+        selected_satellites = []
+    else:
+        selected_satellites = [name.strip() for name in args.satellites.split(",")]
+        assert all(selected_satellites), "--satellites requires nonempty satellite IDs"
     stamp = f"{start:%Y%m%d_%H%M}-{end:%Y%m%d_%H%M}"
     label = f"CR{cr} " if cr is not None else ""
     output = args.output or Path(args.archive_root) / f"SW Animation {label}{stamp}.mp4"
@@ -69,6 +81,7 @@ def main(argv=None):
         slow_sw_pred_mask=cube["is_slow_wind"].values,
         slow_sw_speed=load_empirical_spec().slow_sw_speed(times),
         comparison_frames=comparison_frames,
+        satellites=selected_satellites,
         anim_fps=args.fps,
         anim_dpi=args.dpi or runtime["animation_dpi"],
     )
