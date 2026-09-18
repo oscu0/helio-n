@@ -19,18 +19,20 @@ from Library.Paths import data_path, resolve_repo_path
 from Library.SW.Archive import cr_bounds, iter_crs, write_cr
 from Library.SW.Ballistic import cube_stats, propagate_ballistic
 from Library.SW.Config import (
+    DEFAULT_ENABLED_SATELLITES,
+    get_satellite_config,
     load_ballistic_spec,
     load_empirical_spec,
     load_slow_sw_patch_spec,
+    parse_satellite_ids,
 )
 from Library.SW.Coords import compute_rotation_state
 from Library.SW.Inputs import (
     build_ace_earth_swx_frame,
     build_model_input_series,
-    load_ace_earth_frame,
     load_enlil_prediction_frames,
-    load_stereo_a_frame,
     load_sw_input_frame,
+    load_satellite_frames,
 )
 from Library.SW.Visualization import build_satellite_comparison_frame
 
@@ -48,7 +50,14 @@ def main(argv=None):
     parser.add_argument("--enlil", action="store_true")
     parser.add_argument("--enlil-parquet", type=Path)
     parser.add_argument("--slow-sw", action="store_true", help="Use the empirical slow-wind patch for ACE")
+    parser.add_argument(
+        "--satellites",
+        default=','.join(DEFAULT_ENABLED_SATELLITES),
+        help="Comma-separated configured satellite IDs to include in series.parquet",
+    )
     args = parser.parse_args(argv)
+    enabled_satellites = parse_satellite_ids(args.satellites)
+    assert enabled_satellites, "Propagation requires at least one enabled satellite"
     assert args.source_guard_days > 0
     assert (args.cr is not None) != (args.start is not None or args.end is not None), (
         "Supply one CR number, or both --start and --end"
@@ -80,6 +89,7 @@ def main(argv=None):
                 command.extend(("--enlil-parquet", str(args.enlil_parquet)))
             if args.slow_sw:
                 command.append("--slow-sw")
+            command.extend(("--satellites", ",".join(enabled_satellites)))
             subprocess.run(command, check=True)
         return 0
 
@@ -120,10 +130,11 @@ def main(argv=None):
     )
     cube_info = cube_stats(speed, empirical.slow_sw_speed(grid.time_axis))
     frequency = f"{step}min"
-    satellites = {
-        "ace_earth": (load_ace_earth_frame(), ballistic["earth_phi_target"]),
-        "stereo_a": (load_stereo_a_frame(grid.time_axis, frequency), 0.0),
-    }
+    satellite_frames = load_satellite_frames(
+        satellite_ids=enabled_satellites,
+        time_axis=grid.time_axis,
+        time_freq=frequency,
+    )
     swx = build_ace_earth_swx_frame(prepared["sdo_input_df"])
     enlil = (
         load_enlil_prediction_frames(
@@ -133,7 +144,7 @@ def main(argv=None):
         if args.enlil else {}
     )
     comparisons = {}
-    for sat, (frame, default_phi) in satellites.items():
+    for sat, frame in satellite_frames.items():
         comparisons[sat] = build_satellite_comparison_frame(
             time_axis=grid.time_axis,
             phi_axis=grid.phi_axis,
@@ -143,7 +154,7 @@ def main(argv=None):
             df_sat=frame,
             df_swx=swx if sat == "ace_earth" else None,
             df_noaa=enlil.get(sat),
-            phi_target=default_phi,
+            phi_target=ballistic["earth_phi_target"] if sat == "ace_earth" else 0.0,
             r_target=ballistic["earth_r_target"],
             slow_sw_speed=slow_patch_empirical.slow_sw_speed(grid.time_axis),
             slow_sw_patch=args.slow_sw,
@@ -192,6 +203,11 @@ def main(argv=None):
             f"{ballistic['maximum_input_gap_hours']} hours; no extrapolation"
         ),
         "output_step_minutes": step,
+        "satellites": enabled_satellites,
+        "satellite_coord_frame": {
+            sat: get_satellite_config(sat).coord_frame
+            for sat in enabled_satellites
+        },
         "config": json.loads(Path(ballistic["json_path"]).read_text()),
         "upstream_sql_fill_unresolved": args.input_source == "sql",
     }

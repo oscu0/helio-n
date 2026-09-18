@@ -12,9 +12,8 @@ from Library.ICME import (
 )
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Inputs import (
-    load_ace_earth_frame,
     load_ace_swx_frame,
-    load_stereo_a_frame,
+    load_satellite_frame,
 )
 
 SCORE_FREQ = "1h"
@@ -118,11 +117,12 @@ def restore_observed_and_recurrent_series(
         inclusive="left",
     )
     observed_frames = {
-        "ace_earth": load_ace_earth_frame(),
-        "stereo_a": load_stereo_a_frame(
+        sat_name: load_satellite_frame(
+            sat_id=sat_name,
             time_axis=source_index,
             time_freq=freq,
-        ),
+        )
+        for sat_name in comparison_frames
     }
 
     restored_frames = {}
@@ -150,7 +150,8 @@ def restore_swx_series(comparison_frames, swx_path=None):
     restored_frames = {
         sat_name: frame.copy() for sat_name, frame in comparison_frames.items()
     }
-    assert "ace_earth" in restored_frames, "Missing ACE/Earth comparison frame"
+    if "ace_earth" not in restored_frames:
+        return restored_frames
 
     ace_frame = restored_frames["ace_earth"]
     if "v_swx" in ace_frame.columns:
@@ -503,7 +504,7 @@ def build_icme_duration_by_cr(cr_stats, events, sat):
     return pd.DataFrame(rows)
 
 
-def build_icme_event_df(start_dt, end_dt, sat_labels):
+def build_icme_event_df(start_dt, end_dt, sat_labels, satellite_ids=None):
     """Build event-level ICME context, with Dst populated only at ACE/Earth."""
     start = pd.Timestamp(start_dt)
     end = pd.Timestamp(end_dt)
@@ -522,7 +523,9 @@ def build_icme_event_df(start_dt, end_dt, sat_labels):
     ]
 
     rows = []
-    for sat_name in ["ace_earth", "stereo_a"]:
+    if satellite_ids is None:
+        satellite_ids = list(sat_labels)
+    for sat_name in satellite_ids:
         icme_windows = load_sat_icme_windows(sat_name)
         overlapping_icmes = icme_windows.loc[
             (icme_windows["start"] < end) & (icme_windows["end"] > start)

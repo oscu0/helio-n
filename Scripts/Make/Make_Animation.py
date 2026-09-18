@@ -14,7 +14,13 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/helio_n_matplotlib")
 sys.path.append(str(ROOT_DIR))
 
 from Library.SW.Archive import cr_bounds, load_cube, load_series
-from Library.SW.Config import load_empirical_spec, load_sw_runtime_spec
+from Library.SW.Config import (
+    DEFAULT_ENABLED_SATELLITES,
+    get_satellite_config,
+    load_empirical_spec,
+    load_sw_runtime_spec,
+    parse_satellite_ids,
+)
 from Library.SW.Visualization import export_polar_animation
 
 
@@ -58,15 +64,11 @@ def main(argv=None):
         for name in satellite.columns.get_level_values(0).unique():
             frame = satellite[name].copy()
             frame.attrs["sat"] = name
-            frame.attrs["label"] = {"ace_earth": "ACE @ Earth", "stereo_a": "STEREO-A"}.get(name, name)
+            frame.attrs["label"] = get_satellite_config(name).label
             comparison_frames[name] = frame
-    if args.satellites is None:
-        selected_satellites = None
-    elif args.satellites == "none":
-        selected_satellites = []
-    else:
-        selected_satellites = [name.strip() for name in args.satellites.split(",")]
-        assert all(selected_satellites), "--satellites requires nonempty satellite IDs"
+    selected_satellites = parse_satellite_ids(args.satellites)
+    if args.satellites is None and not set(selected_satellites).issubset(comparison_frames):
+        selected_satellites = list(comparison_frames)
     stamp = f"{start:%Y%m%d_%H%M}-{end:%Y%m%d_%H%M}"
     label = f"CR{cr} " if cr is not None else ""
     output = args.output or Path(args.archive_root) / f"SW Animation {label}{stamp}.mp4"

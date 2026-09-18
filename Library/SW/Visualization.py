@@ -8,7 +8,8 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from Library.SW.Archive import cr_for_time
-from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS, SOLAR_RADIUS_KM
+from Library.SW.Config import get_satellite_config
 from Library.SW.Inputs import SATELLITE_MAX_SOURCE_GAP, interpolate_short_gaps
 from Library.SW.Stats import build_recurrent_series
 
@@ -28,6 +29,7 @@ AU_KM = 149597870.7
 SECONDS_PER_DAY = 86400.0
 AGE_SAMPLE_TOLERANCE = pd.Timedelta(hours=12)
 EXPORT_PLOT_FREQ = "1h"
+HEE_COORDINATE_COLUMNS = ("x_hee_au", "y_hee_au", "z_hee_au")
 
 
 def find_axis_index(axis_values, target):
@@ -45,6 +47,64 @@ def resolve_slow_sw_speed(time_axis, slow_sw_speed):
         values = np.full(len(time_axis), float(values))
     assert len(values) == len(time_axis)
     return pd.Series(values, index=pd.DatetimeIndex(time_axis), name="slow_sw_speed")
+
+
+def _build_hee_target_frame(df_sat, target_index, phi_target, r_target):
+    target_frame = pd.DataFrame(index=pd.DatetimeIndex(target_index))
+    if df_sat is not None and set(HEE_COORDINATE_COLUMNS).issubset(df_sat.columns):
+        if df_sat.attrs.get("position_static", False):
+            positions = pd.DataFrame(
+                {
+                    column: float(df_sat[column].dropna().iloc[0])
+                    for column in HEE_COORDINATE_COLUMNS
+                },
+                index=target_frame.index,
+            )
+        else:
+            positions = interpolate_short_gaps(
+                df_sat[list(HEE_COORDINATE_COLUMNS)],
+                target_frame.index,
+                max_source_gap=SATELLITE_MAX_SOURCE_GAP,
+            )
+        target_frame[list(HEE_COORDINATE_COLUMNS)] = positions
+        radius_au = np.sqrt(
+            (positions["x_hee_au"] ** 2)
+            + (positions["y_hee_au"] ** 2)
+            + (positions["z_hee_au"] ** 2)
+        )
+        target_frame["phi_hee"] = np.mod(
+            np.degrees(np.arctan2(positions["y_hee_au"], positions["x_hee_au"])),
+            360.0,
+        )
+        target_frame["r_hee"] = radius_au * AU_KM / SOLAR_RADIUS_KM
+        target_frame["lat_hee"] = np.degrees(
+            np.arcsin(
+                np.divide(
+                    positions["z_hee_au"],
+                    radius_au,
+                    out=np.full(len(positions), np.nan),
+                    where=radius_au.to_numpy(dtype=float) > 0.0,
+                )
+            )
+        )
+
+    if (
+        df_sat is not None
+        and df_sat.attrs.get("coord_frame") == "HEE"
+        and {"phi_hee", "r_hee"}.issubset(target_frame.columns)
+    ):
+        target_frame["phi_target"] = target_frame["phi_hee"]
+        target_frame["r_target"] = target_frame["r_hee"]
+    elif df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
+        target_frame[["phi_target", "r_target"]] = interpolate_short_gaps(
+            df_sat[["phi_target", "r_target"]],
+            target_frame.index,
+            max_source_gap=SATELLITE_MAX_SOURCE_GAP,
+        )
+    else:
+        target_frame["phi_target"] = float(phi_target)
+        target_frame["r_target"] = float(r_target)
+    return target_frame
 
 
 def build_satellite_comparison_frame(
@@ -69,16 +129,12 @@ def build_satellite_comparison_frame(
         prediction_time_offset_steps >= 0
     ), "prediction_time_offset_steps must be non-negative"
 
-    target_frame = pd.DataFrame(index=pd.DatetimeIndex(time_axis))
-    if df_sat is not None and {"phi_target", "r_target"}.issubset(df_sat.columns):
-        target_frame[["phi_target", "r_target"]] = interpolate_short_gaps(
-            df_sat[["phi_target", "r_target"]],
-            target_frame.index,
-            max_source_gap=SATELLITE_MAX_SOURCE_GAP,
-        )
-    else:
-        target_frame["phi_target"] = float(phi_target)
-        target_frame["r_target"] = float(r_target)
+    target_frame = _build_hee_target_frame(
+        df_sat=df_sat,
+        target_index=time_axis,
+        phi_target=phi_target,
+        r_target=r_target,
+    )
 
     v_predict_raw = np.full(len(time_axis), np.nan, dtype=float)
     v_predict = np.full(len(time_axis), np.nan, dtype=float)
@@ -161,6 +217,11 @@ def build_satellite_comparison_frame(
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
     if df_sat is not None and "lat_hge" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hge"]], how="left")
+    for column in HEE_COORDINATE_COLUMNS:
+        if column in target_frame.columns:
+            comparison_frame[column] = target_frame[column]
+    if "lat_hee" in target_frame.columns:
+        comparison_frame["lat_hee"] = target_frame["lat_hee"]
     if df_swx is not None and "v_swx" in df_swx.columns:
         comparison_frame = comparison_frame.join(df_swx[["v_swx"]], how="outer")
     if df_noaa is not None and "v_noaa" in df_noaa.columns:

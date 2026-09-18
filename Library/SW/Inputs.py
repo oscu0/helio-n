@@ -7,6 +7,7 @@ import psycopg
 import userpwd
 from Library.Paths import data_path, resolve_repo_path
 from Library.SW.Constants import SW_MODEL_V2_HANDOFF
+from Library.SW.Config import get_satellite_config
 
 DEFAULT_SQL_QUERY = """
 SELECT
@@ -47,11 +48,19 @@ DEFAULT_STEREO_A_LABEL = "STEREO-A"
 EARTH_RADII_PER_SOLAR_RADIUS = 109.0763707060096
 SATELLITE_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
 SATELLITE_FRAME_COLUMNS = [
+    "x_hee_au",
+    "y_hee_au",
+    "z_hee_au",
     "v",
-    "phi_target",
-    "r_target",
-    "lat_hgs",
-    "lat_hge",
+    "v_x",
+    "v_y",
+    "v_z",
+    "N",
+    "t",
+    "b",
+    "b_x",
+    "b_y",
+    "b_z",
     "v_swx",
 ]
 
@@ -195,10 +204,19 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
     df_sat.index = pd.to_datetime(df_sat.index)
     rename_map = {}
     if "v" not in df_sat.columns:
-        for candidate in ("speed", "v_ace", "v_real"):
+        for candidate in ("speed", "V", "v_ace", "v_real"):
             if candidate in df_sat.columns:
                 rename_map[candidate] = "v"
                 break
+    for canonical, candidates in {
+        "N": ("density", "n"),
+        "t": ("temperature", "temp"),
+    }.items():
+        if canonical not in df_sat.columns:
+            for candidate in candidates:
+                if candidate in df_sat.columns:
+                    rename_map[candidate] = canonical
+                    break
     if "v_swx" not in df_sat.columns and "forecast_sw_speed" in df_sat.columns:
         rename_map["forecast_sw_speed"] = "v_swx"
     df_sat = df_sat.rename(columns=rename_map)
@@ -224,11 +242,15 @@ def load_cached_satellite_frame(path, sat, label=None):
 
 
 def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
-    return load_cached_satellite_frame(
+    frame = load_cached_satellite_frame(
         ace_path,
         sat=DEFAULT_ACE_EARTH_SAT,
         label=DEFAULT_ACE_EARTH_LABEL,
     )
+    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = (1.0, 0.0, 0.0)
+    frame.attrs["coord_frame"] = "HEE"
+    frame.attrs["position_static"] = True
+    return frame
 
 
 def load_ace_swx_frame(swx_path=DEFAULT_SWX_PARQUET_PATH):
@@ -284,25 +306,54 @@ def load_stereo_a_frame(
         - sampling_margin : pd.Timestamp(time_axis.max())
         + sampling_margin
     ]
-    stereo_a_df = stereo_a_df.rename(
-        columns={
-            "V": "v",
-            "radialDistance": "r_target",
-            "heliographicLatitude": "lat_hge",
-            "heliographicLongitude": "phi_target",
-        }
-    )
+    stereo_a_df = stereo_a_df.rename(columns={"V": "v"})
     for column in stereo_a_df.columns:
         stereo_a_df[column] = pd.to_numeric(stereo_a_df[column], errors="coerce")
+    stereo_a_df["phi_target"] = stereo_a_df["heliographicLongitude"]
     stereo_a_df["r_target"] = (
-        stereo_a_df["r_target"] / EARTH_RADII_PER_SOLAR_RADIUS
+        stereo_a_df["radialDistance"] / EARTH_RADII_PER_SOLAR_RADIUS
     )
+    stereo_a_df["lat_hgs"] = stereo_a_df["heliographicLatitude"]
     stereo_a_df = stereo_a_df.resample(time_freq).mean()
     stereo_a_df = interpolate_short_gaps(stereo_a_df, time_axis, max_source_gap)
     stereo_a_df.attrs["sat"] = DEFAULT_STEREO_A_SAT
     stereo_a_df.attrs["label"] = DEFAULT_STEREO_A_LABEL
-    stereo_a_df.attrs["coord_frame"] = "HGE"
+    stereo_a_df.attrs["coord_frame"] = "HGS"
     return stereo_a_df
+
+
+def load_satellite_frame(
+    sat_id,
+    time_axis=None,
+    time_freq=None,
+    ace_path=DEFAULT_ACE_PARQUET_PATH,
+    stereo_a_path=DEFAULT_STEREO_A_PARQUET_PATH,
+):
+    """Load one configured source in the common satellite-frame schema."""
+    config = get_satellite_config(sat_id)
+    if config.loader == "ace_earth":
+        return load_ace_earth_frame(ace_path=ace_path)
+    if config.loader == "stereo_a":
+        assert time_axis is not None and time_freq is not None, (
+            "STEREO-A loading requires time_axis and time_freq"
+        )
+        return load_stereo_a_frame(
+            time_axis=time_axis,
+            time_freq=time_freq,
+            stereo_path=stereo_a_path,
+        )
+    raise ValueError(f"No data loader configured for satellite: {sat_id}")
+
+
+def load_satellite_frames(satellite_ids, time_axis, time_freq):
+    return {
+        sat_id: load_satellite_frame(
+            sat_id=sat_id,
+            time_axis=time_axis,
+            time_freq=time_freq,
+        )
+        for sat_id in satellite_ids
+    }
 
 
 def load_enlil_prediction_frames(
