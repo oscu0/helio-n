@@ -16,7 +16,7 @@ OUTPUT_STEP_MINUTES = 60
 ROTATION = compute_rotation_state(phi_step_minutes=120)
 
 
-def propagate(source, time_axis, phi_axis, radius_axis, maximum_gap_hours=6):
+def propagate(source, time_axis, phi_axis, radius_axis, maximum_gap_hours=12):
     return propagate_continuous_boundary(
         df_v_run=source.to_frame(name="v"),
         time_axis=time_axis,
@@ -130,13 +130,13 @@ class BallisticProductionTests(unittest.TestCase):
         target_index = 2
         self.assertGreater(float(actual[target_index, 0, 0]), 600.0)
 
-    def test_exactly_six_hour_source_segment_is_filled(self):
+    def test_exactly_twelve_hour_source_segment_is_filled(self):
         start = pd.Timestamp("2020-01-01 00:00:00")
         source = pd.Series(
             [300.0, 600.0],
-            index=[start, start + pd.Timedelta(hours=6)],
+            index=[start, start + pd.Timedelta(hours=12)],
         )
-        time_axis = pd.date_range(start, periods=7, freq="1h")
+        time_axis = pd.date_range(start, periods=13, freq="1h")
         forward = propagate(source, time_axis, [0.0], [20.0])
         reverse = propagate(source.iloc[::-1], time_axis, [0.0], [20.0])
         self.assertTrue(np.isfinite(forward[:, 0, 0]).all())
@@ -148,15 +148,15 @@ class BallisticProductionTests(unittest.TestCase):
             [400.0, 500.0, 600.0],
             index=[
                 start,
-                start + pd.Timedelta(hours=7),
-                start + pd.Timedelta(hours=8),
+                start + pd.Timedelta(hours=13),
+                start + pd.Timedelta(hours=14),
             ],
         )
-        time_axis = pd.date_range(start, periods=9, freq="1h")
+        time_axis = pd.date_range(start, periods=15, freq="1h")
         cube = propagate(source, time_axis, [0.0], [20.0])
-        missing = cube[1:7, 0, 0]
+        missing = cube[1:13, 0, 0]
         self.assertTrue(np.isnan(missing).all())
-        self.assertTrue(np.isfinite(cube[7:, 0, 0]).all())
+        self.assertTrue(np.isfinite(cube[13:, 0, 0]).all())
 
     def test_longitude_is_an_exact_time_shift(self):
         start = pd.Timestamp("2020-01-01 00:00:00")

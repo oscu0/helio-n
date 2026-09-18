@@ -93,7 +93,7 @@ def propagate_continuous_reference(
     launch_radius_rsun,
     solar_radius_km,
     output_step="2min",
-    maximum_source_gap="6h",
+    maximum_source_gap="12h",
     source_sample_step="250ms",
 ):
     """Dense-sampling oracle for small continuous-characteristic tests."""

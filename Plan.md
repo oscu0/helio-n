@@ -53,7 +53,7 @@ The hard contract suite currently covers:
 - continuous compression and rarefaction segments, faster-only collisions,
   source-order invariance, and exact longitude time shifts;
 - finite output speed bounds and frame-artifact round trips;
-- native hourly input retention, exactly-six-hour source segments, no segment
+- native hourly input retention, exactly-twelve-hour source segments, no segment
   over a longer gap, and no leading or trailing extrapolation.
 
 The smoke report records frame coverage, finite-mask overlap, common-cell
@@ -145,11 +145,11 @@ knots rather than materializing two-minute launch samples.
 
 Use this rule:
 
-- if valid bounding observations are separated by at most six elapsed hours,
+- if valid bounding observations are separated by at most twelve elapsed hours,
   their linear boundary segment is valid in full;
 - this includes the normal adjacent-hour segment;
-- if separation exceeds six hours, create no segment across the gap;
-- never partially fill the first or last six hours of an over-limit gap;
+- if separation exceeds twelve hours, create no segment across the gap;
+- never partially fill the first or last twelve hours of an over-limit gap;
 - do not extrapolate before the first or after the last observation.
 
 Determine gaps from the original observed timestamps before reindexing or
@@ -174,7 +174,7 @@ external comparison products such as ENLIL are separate concerns.
 > fills and whether a raw/unfilled source must replace it. Removing pandas-side
 > interpolation alone may not expose the original gaps.
 
-Test one-hour, exactly-six-hour, over-six-hour, leading, and trailing gaps.
+Test one-hour, exactly-twelve-hour, over-twelve-hour, leading, and trailing gaps.
 
 ## 3. Refactor per-CR outputs and ingestion
 

@@ -117,6 +117,8 @@ standard satellite comparisons. `propagate_ballistic()` returns the speed cube;
 `cube_stats()` leaves it unchanged and computes the slow-wind mask, limits, and
 counts. The present mask is inferred by output-time speed equality, so a future
 time-varying slow-wind model will need source provenance carried by propagation.
+Ballistic source knots are joined only across gaps of at most 12 hours;
+longer gaps remain empty. This is separate from satellite gap handling:
 STEREO-A speed and position are interpolated only between nonempty sampled bins
 at most 6 hours apart; longer gaps remain missing. Comparison-frame position
 sampling obeys the same limit. Previously written CR archives are unchanged

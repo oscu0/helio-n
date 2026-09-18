@@ -1,6 +1,6 @@
 {
     "output_step_minutes": 60,
-    "maximum_input_gap_hours": 6,
+    "maximum_input_gap_hours": 12,
     "phi_step_minutes": 120,
     "r0": 20,
     "r_max": 215,
