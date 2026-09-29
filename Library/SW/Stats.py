@@ -25,6 +25,26 @@ COMPARISON_ORDER = [
     "slow_model_vs_swx",
 ]
 PAPER_COMPARISONS_BY_SAT = {
+    "ace": [
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "slow_model_vs_swx",
+            "reference": "v_swx",
+            "candidate": "v_predict",
+            "regimes": ["all_sw"],
+        },
+    ],
     "ace_earth": [
         {
             "comparison": "raw_vs_observed",
@@ -140,6 +160,32 @@ def restore_observed_and_recurrent_series(
         restored = frame.copy()
         restored["v_real"] = observed.reindex(restored.index)
         restored["v_1cr_ago"] = recurrent.reindex(restored.index)
+        observation_columns = [
+            column
+            for column in (
+                "N",
+                "t",
+                "b",
+                "b_x_gse",
+                "b_y_gse",
+                "b_z_gse",
+                "b_r_rtn",
+                "b_t_rtn",
+                "b_n_rtn",
+                "x_hee_au",
+                "y_hee_au",
+                "z_hee_au",
+                "lat_hee",
+                "phi_target",
+                "r_target",
+            )
+            if column in observed_frame.columns
+        ]
+        if observation_columns:
+            restored = restored.drop(
+                columns=[column for column in observation_columns if column in restored.columns]
+            )
+            restored = restored.join(observed_frame[observation_columns], how="left")
         restored_frames[sat_name] = restored
 
     return restored_frames
@@ -150,10 +196,11 @@ def restore_swx_series(comparison_frames, swx_path=None):
     restored_frames = {
         sat_name: frame.copy() for sat_name, frame in comparison_frames.items()
     }
-    if "ace_earth" not in restored_frames:
+    ace_sat = "ace" if "ace" in restored_frames else "ace_earth"
+    if ace_sat not in restored_frames:
         return restored_frames
 
-    ace_frame = restored_frames["ace_earth"]
+    ace_frame = restored_frames[ace_sat]
     if "v_swx" in ace_frame.columns:
         ace_frame = ace_frame.drop(columns="v_swx")
     swx_frame = (
@@ -161,7 +208,7 @@ def restore_swx_series(comparison_frames, swx_path=None):
         if swx_path is None
         else load_ace_swx_frame(swx_path)
     )
-    restored_frames["ace_earth"] = ace_frame.join(
+    restored_frames[ace_sat] = ace_frame.join(
         swx_frame[["v_swx"]], how="outer"
     ).sort_index()
     return restored_frames
@@ -190,7 +237,7 @@ def prepare_eval_mask(series, eval_index, output_name, freq=SCORE_FREQ):
 
 
 def load_sat_icme_windows(sat_name):
-    if sat_name == "ace_earth":
+    if sat_name in {"ace", "ace_earth"}:
         return load_icme_windows()
     if sat_name == "stereo_a":
         return load_icmecat_windows("STEREO-A")
@@ -534,7 +581,7 @@ def build_icme_event_df(start_dt, end_dt, sat_labels, satellite_ids=None):
             event_start = pd.Timestamp(event.start)
             event_end = pd.Timestamp(event.end)
             event_midpoint = event_start + (event_end - event_start) / 2
-            if sat_name == "ace_earth":
+            if sat_name in {"ace", "ace_earth"}:
                 event_id = f"earth_{event_start:%Y%m%d_%H%M}"
                 mo_start = pd.Timestamp(event.T_start)
                 dst_min = pd.to_numeric(event.dst_min_omni_body, errors="coerce")

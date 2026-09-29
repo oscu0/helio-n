@@ -121,9 +121,15 @@ def build_satellite_comparison_frame(
     cr_days=CARRINGTON_ROTATION_DAYS,
     draw_slow_sw=True,
     slow_sw_speed=None,
-    slow_sw_patch=True,
     prediction_time_offset_steps=0,
 ):
+    """Build baseline and slow-wind-corrected comparison series.
+
+    ``v_predict_raw`` preserves the propagated forecast with its 300 km/s
+    slow-wind baseline. For ACE, ``v_predict`` applies the empirical
+    time-varying slow-wind patch wherever the propagated slow-wind mask is true.
+    The speed cube itself is not modified.
+    """
     prediction_time_offset_steps = int(prediction_time_offset_steps)
     assert (
         prediction_time_offset_steps >= 0
@@ -180,8 +186,10 @@ def build_satellite_comparison_frame(
             df_sat[["v"]].rename(columns={"v": "v_real"}),
             how="outer",
         )
-        if slow_sw_patch and df_sat.attrs.get("sat") == "ace_earth":
-            assert slow_sw_speed is not None, "slow_sw_patch requires slow_sw_speed for ACE @ Earth"
+        if df_sat.attrs.get("sat") in {"ace", "ace_earth"}:
+            assert slow_sw_speed is not None, (
+                "ACE comparison requires an empirical slow-wind speed series"
+            )
             slow_sw_series = resolve_slow_sw_speed(time_axis, slow_sw_speed)
             patch_mask = pd.Series(
                 slow_sw_target_mask,
@@ -213,6 +221,20 @@ def build_satellite_comparison_frame(
             comparison_frame.index.union(recurrent_index)
         )
         comparison_frame["v_1cr_ago"] = recurrent.reindex(comparison_frame.index)
+    if df_sat is not None:
+        measurement_columns = [
+            column
+            for column in (
+                "N", "t", "b", "b_x_gse", "b_y_gse", "b_z_gse",
+                "b_r_rtn", "b_t_rtn", "b_n_rtn",
+            )
+            if column in df_sat.columns
+        ]
+        if measurement_columns:
+            comparison_frame = comparison_frame.join(
+                df_sat[measurement_columns],
+                how="outer",
+            )
     if df_sat is not None and "lat_hgs" in df_sat.columns:
         comparison_frame = comparison_frame.join(df_sat[["lat_hgs"]], how="left")
     if df_sat is not None and "lat_hge" in df_sat.columns:

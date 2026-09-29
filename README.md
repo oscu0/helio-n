@@ -113,10 +113,32 @@ in-memory cube. Its sample archive and animation omit satellite comparisons.
 `inputs.parquet` retains normalized source rows (including missing values) over
 the source guard; `prepared_inputs.parquet` adds the empirical speeds used to
 build launch knots. `series.parquet` keeps core-period CH-area/input speeds and
-standard satellite comparisons. `propagate_ballistic()` returns the speed cube;
-`cube_stats()` leaves it unchanged and computes the slow-wind mask, limits, and
-counts. The present mask is inferred by output-time speed equality, so a future
-time-varying slow-wind model will need source provenance carried by propagation.
+standard satellite comparisons. The satellite registry keeps `ace` (native
+ACE spacecraft coordinates) separate from `ace_earth` (the propagated
+ACE-at-Earth reference at the fixed Earth HEE point). The default comparison
+uses native ACE. ACE comparisons use the native
+`Data/ACE 1h.parquet` source and its time-dependent HEE position, rather than
+the fixed Earth-point coordinate series. They always store both
+`v_predict_raw` (the propagated forecast with the 300 km/s slow-wind baseline)
+and `v_predict` (the same forecast with a time-varying empirical slow-wind patch),
+plus `slow_sw_patch_mask`. The patch is applied to the ACE comparison series;
+it does not modify the propagated speed cube. STEREO-A keeps the unpatched
+series. Older ACE archives without the patch mask cannot be reused by a new
+sequential propagation run; archives containing only the legacy `ace_earth`
+series also cannot satisfy the new default `ace` selection. Use a new archive
+root to rebuild them.
+`Scripts/Make/SW_Report.py` writes the existing XLSX report and an hourly CSV
+(`SW Export YYYYMMDD_HHMM-YYYYMMDD_HHMM.csv`). The CSV contains the CH-area and
+forecast fields for ACE and STEREO-A, native speed/density/temperature/magnetic
+fields when present, and STEREO-A HEE coordinates plus its spherical position
+relative to ACE. ACE exports contain both the patched forecast and the raw
+300 km/s-baseline forecast. Missing instrument fields remain empty rather than
+being filled with model values; magnetic components retain the source
+instrument frame.
+`propagate_ballistic()` returns the speed cube; `cube_stats()` leaves it
+unchanged and computes the slow-wind mask, limits, and counts. The present mask
+is inferred by output-time speed equality, so a future time-varying slow-wind
+model will need source provenance carried by propagation.
 Ballistic source knots are joined only across gaps of at most 12 hours;
 longer gaps remain empty. This is separate from satellite gap handling:
 STEREO-A speed and position are interpolated only between nonempty sampled bins

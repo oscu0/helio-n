@@ -10,7 +10,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Library.SW.Report import build_hourly_report_frame, write_report  # noqa: E402
+from Library.SW.Report import (  # noqa: E402
+    build_hourly_csv_frame,
+    build_hourly_report_frame,
+    write_csv,
+    write_report,
+)
 from Library.SW.Stats import (  # noqa: E402
     restore_observed_and_recurrent_series,
     restore_swx_series,
@@ -45,6 +50,11 @@ def parse_args(argv):
         "--report-out",
         default=None,
         help="Optional explicit Excel output path.",
+    )
+    parser.add_argument(
+        "--csv-out",
+        default=None,
+        help="Optional explicit hourly CSV output path.",
     )
     parser.add_argument(
         "--swx-parquet",
@@ -82,13 +92,23 @@ def main(argv):
         if args.report_out is not None
         else output_dir / f"SW Report {stamp}.xlsx"
     )
+    csv_out = (
+        Path(args.csv_out)
+        if args.csv_out is not None
+        else output_dir / f"SW Export {stamp}.csv"
+    )
 
     reproduction_frame = pd.read_parquet(reproduction_path)
     reproduction_frame.index = pd.to_datetime(reproduction_frame.index)
     reproduction_frame = reproduction_frame.sort_index().sort_index(axis=1)
+    available_satellites = set(reproduction_frame["satellite"].columns.get_level_values(0))
+    assert "ace" in available_satellites, (
+        "Report requires a native ACE archive; ACE-at-Earth cannot be relabelled as ACE"
+    )
     comparison_frames = {
         sat_name: reproduction_frame["satellite", sat_name].copy()
-        for sat_name in ["ace_earth", "stereo_a"]
+        for sat_name in ["ace", "stereo_a"]
+        if sat_name in available_satellites
     }
     for frame in comparison_frames.values():
         if "v_noaa" in frame.columns:
@@ -113,7 +133,16 @@ def main(argv):
         freq=args.freq,
     )
     write_report(report_frame, report_out)
+    csv_frame = build_hourly_csv_frame(
+        reproduction_frame=reproduction_frame,
+        comparison_frames=comparison_frames,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        freq=args.freq,
+    )
+    write_csv(csv_frame, csv_out)
     print("Saved SW report:", report_out)
+    print("Saved SW CSV export:", csv_out)
     print(
         "Source:",
         reproduction_path,
