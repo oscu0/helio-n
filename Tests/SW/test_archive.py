@@ -35,7 +35,18 @@ class ArchiveTests(unittest.TestCase):
         slow[-1, 1, 1] = True
         inputs = pd.DataFrame({"dt": times, "ch_relative_area": 0.0})
         prepared = inputs.assign(v_empirical=value)
-        series = pd.DataFrame({"speed": np.arange(len(times))}, index=times)
+        ace_series = pd.DataFrame(
+            {
+                "v_predict_raw": np.full(len(times), value),
+                "v_predict": np.full(len(times), value - 5.0),
+                "slow_sw_patch_mask": np.ones(len(times), dtype=bool),
+            },
+            index=times,
+        )
+        series = pd.concat(
+            {"satellite": pd.concat({"ace_earth": ace_series}, axis="columns")},
+            axis="columns",
+        )
         return write_cr(
             self.root, cr, times, self.phi, self.radius,
             speed, slow, inputs, prepared, series,
@@ -54,6 +65,13 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(len(load_inputs(self.root, self.cr)), len(cube.time))
         self.assertTrue((load_inputs(self.root, self.cr, prepared=True)["v_empirical"] == 410.0).all())
         self.assertEqual(len(pd.read_parquet(self.root / "index.parquet")), 1)
+        archived_series = load_series(self.root, *cr_bounds(self.cr))
+        self.assertIn(("satellite", "ace_earth", "v_predict_raw"), archived_series.columns)
+        self.assertIn(("satellite", "ace_earth", "v_predict"), archived_series.columns)
+        self.assertIn(("satellite", "ace_earth", "slow_sw_patch_mask"), archived_series.columns)
+        self.assertTrue(
+            (archived_series["satellite", "ace_earth", "v_predict_raw"] == 410.0).all()
+        )
         trajectory = pd.DataFrame(
             {"phi_target": 0.0, "r_target": 215.0},
             index=pd.DatetimeIndex(cube.time.values),
@@ -148,6 +166,44 @@ class ArchiveTests(unittest.TestCase):
         self.assertTrue(np.isfinite(sampled.loc[times[1], "v_predict"]))
         self.assertTrue(np.isnan(sampled.loc[times[3], "v_predict"]))
         self.assertTrue(np.isnan(sampled.loc[times[3], "phi_target"]))
+
+    def test_ace_comparison_keeps_baseline_and_always_patches_slow_wind(self):
+        start = pd.Timestamp("2018-01-01 00:00")
+        times = pd.date_range(start, periods=4, freq="1h")
+        speed = np.full((len(times), 2, 2), 400.0, dtype=np.float32)
+        speed[:, 0, 1] = [300.0, 400.0, 300.0, 400.0]
+        slow_mask = np.zeros_like(speed, dtype=bool)
+        slow_mask[[0, 2], 0, 1] = True
+        ace = pd.DataFrame(
+            {
+                "phi_target": 0.0,
+                "r_target": 215.0,
+                "v": [350.0, 360.0, 370.0, 380.0],
+            },
+            index=times,
+        )
+        ace.attrs["sat"] = "ace"
+
+        sampled = build_satellite_comparison_frame(
+            time_axis=times,
+            phi_axis=self.phi,
+            r_axis=self.radius,
+            grid_raw=speed,
+            slow_sw_pred_mask=slow_mask,
+            df_sat=ace,
+            slow_sw_speed=np.array([320.0, 321.0, 322.0, 323.0]),
+        )
+        sampled = sampled.loc[times]
+
+        np.testing.assert_array_equal(
+            sampled["v_predict_raw"].to_numpy(), [300.0, 400.0, 300.0, 400.0]
+        )
+        np.testing.assert_array_equal(
+            sampled["v_predict"].to_numpy(), [320.0, 400.0, 322.0, 400.0]
+        )
+        np.testing.assert_array_equal(
+            sampled["slow_sw_patch_mask"].to_numpy(), [True, False, True, False]
+        )
 
 
 if __name__ == "__main__":

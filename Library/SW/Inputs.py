@@ -1,12 +1,20 @@
 from pathlib import Path
 
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 import numpy as np
 import pandas as pd
 import psycopg
+from sunpy.coordinates.frames import (
+    GeocentricSolarEcliptic,
+    HeliocentricEarthEcliptic,
+    HeliographicStonyhurst,
+)
 
 import userpwd
 from Library.Paths import data_path, resolve_repo_path
 from Library.SW.Constants import SW_MODEL_V2_HANDOFF
+from Library.SW.Constants import SOLAR_RADIUS_KM
 from Library.SW.Config import get_satellite_config
 
 DEFAULT_SQL_QUERY = """
@@ -35,12 +43,18 @@ DEFAULT_SQL_CONNECTION = {
 }
 
 DEFAULT_INPUT_PARQUET_PATH = data_path("CH Area.parquet")
-DEFAULT_ACE_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
+DEFAULT_ACE_PARQUET_PATH = data_path("ACE 1h.parquet")
+DEFAULT_ACE_AT_EARTH_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
+# Daily GSE positions published by the ACE Science Center:
+# https://izw1.caltech.edu/ACE/ASC/DATA/pos_att/ACE_GSE_position.txt
+DEFAULT_ACE_EPHEMERIS_PATH = data_path("ACE GSE position.txt")
 DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A PLASTIC.parquet")
 # 5,087 native forecast_dt/forecast_sw_speed points from
 # sdo.sdo_sw_forecast_0193p over [2018-01-01, 2019-01-01), without interpolation.
 DEFAULT_SWX_PARQUET_PATH = data_path("SWX Forecast 2018.parquet")
 DEFAULT_ENLIL_PARQUET_PATH = data_path("ENLIL 2018-02-01 2018-07-01.parquet")
+DEFAULT_ACE_SAT = "ace"
+DEFAULT_ACE_LABEL = "ACE"
 DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
 DEFAULT_STEREO_A_SAT = "stereo_a"
@@ -58,11 +72,16 @@ SATELLITE_FRAME_COLUMNS = [
     "N",
     "t",
     "b",
-    "b_x",
-    "b_y",
-    "b_z",
+    "b_x_gse",
+    "b_y_gse",
+    "b_z_gse",
+    "b_r_rtn",
+    "b_t_rtn",
+    "b_n_rtn",
     "v_swx",
 ]
+ACE_GSE_COLUMNS = ("x_gse_km", "y_gse_km", "z_gse_km")
+AU_KM = 149597870.7
 
 
 def iter_year_windows(start_dt, end_dt):
@@ -190,6 +209,90 @@ def load_sw_input_frame(
     return normalize_sw_input_frame(df_input_raw, start_dt=start_dt, end_dt=end_dt)
 
 
+def _hee_cartesian_from_hgs(index, longitude_deg, latitude_deg, radius_au):
+    """Convert Heliographic Stonyhurst positions to Heliocentric Earth Ecliptic."""
+    observation_times = pd.DatetimeIndex(index)
+    source = SkyCoord(
+        lon=np.asarray(longitude_deg, dtype=float) * u.deg,
+        lat=np.asarray(latitude_deg, dtype=float) * u.deg,
+        radius=np.asarray(radius_au, dtype=float) * u.AU,
+        frame=HeliographicStonyhurst(obstime=observation_times),
+    )
+    target = source.transform_to(
+        HeliocentricEarthEcliptic(obstime=observation_times)
+    )
+    xyz_au = target.cartesian.xyz.to_value(u.AU).T
+    return pd.DataFrame(
+        xyz_au,
+        index=observation_times,
+        columns=["x_hee_au", "y_hee_au", "z_hee_au"],
+    )
+
+
+def _hee_cartesian_from_gse(index, x_km, y_km, z_km):
+    """Convert geocentric solar-ecliptic ACE positions to HEE."""
+    observation_times = pd.DatetimeIndex(index)
+    source = SkyCoord(
+        np.asarray(x_km, dtype=float) * u.km,
+        np.asarray(y_km, dtype=float) * u.km,
+        np.asarray(z_km, dtype=float) * u.km,
+        frame=GeocentricSolarEcliptic(obstime=observation_times),
+        representation_type="cartesian",
+    )
+    target = source.transform_to(
+        HeliocentricEarthEcliptic(obstime=observation_times)
+    )
+    xyz_au = target.cartesian.xyz.to_value(u.AU).T
+    return pd.DataFrame(
+        xyz_au,
+        index=observation_times,
+        columns=["x_hee_au", "y_hee_au", "z_hee_au"],
+    )
+
+
+def _load_ace_hee_ephemeris(path):
+    ephemeris_path = resolve_repo_path(path)
+    assert ephemeris_path.exists(), f"Missing ACE ephemeris: {ephemeris_path}"
+    raw = pd.read_csv(ephemeris_path, sep=r"\s+", engine="python")
+    required = {"Year", "DOY", "Secofday", "GSE_X(km)", "GSE_y(km)", "GSE_z(km)"}
+    assert required.issubset(raw.columns), (
+        f"ACE ephemeris must contain {sorted(required)}; got {list(raw.columns)}"
+    )
+    dates = pd.to_datetime(
+        raw["Year"].astype(str) + "-" + raw["DOY"].astype(str),
+        format="%Y-%j",
+        utc=True,
+    ).dt.tz_convert(None) + pd.to_timedelta(raw["Secofday"], unit="s")
+    source = pd.DataFrame(
+        {
+            "x_gse_km": pd.to_numeric(raw["GSE_X(km)"], errors="coerce").to_numpy(),
+            "y_gse_km": pd.to_numeric(raw["GSE_y(km)"], errors="coerce").to_numpy(),
+            "z_gse_km": pd.to_numeric(raw["GSE_z(km)"], errors="coerce").to_numpy(),
+        },
+        index=pd.DatetimeIndex(dates),
+    )
+    source = source.dropna().sort_index()
+    source = source[~source.index.duplicated(keep="last")]
+    return source
+
+
+def _convert_ace_gse_columns_to_hee(frame):
+    gse = frame[list(ACE_GSE_COLUMNS)].dropna()
+    if gse.empty:
+        return pd.DataFrame(
+            index=frame.index,
+            columns=["x_hee_au", "y_hee_au", "z_hee_au"],
+            dtype=float,
+        )
+    converted = _hee_cartesian_from_gse(
+        gse.index,
+        gse["x_gse_km"],
+        gse["y_gse_km"],
+        gse["z_gse_km"],
+    )
+    return converted.reindex(frame.index).interpolate(method="time")
+
+
 def normalize_satellite_frame(df_sat_raw, sat, label=None):
     df_sat = df_sat_raw.copy()
 
@@ -211,6 +314,13 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
     for canonical, candidates in {
         "N": ("density", "n"),
         "t": ("temperature", "temp"),
+        "b": ("B", "b_total", "magnetic_field_magnitude"),
+        "b_x_gse": ("B_X_GSE",),
+        "b_y_gse": ("B_Y_GSE",),
+        "b_z_gse": ("B_Z_GSE",),
+        "b_r_rtn": ("b_r", "Br"),
+        "b_t_rtn": ("b_t", "Bt"),
+        "b_n_rtn": ("b_n", "Bn"),
     }.items():
         if canonical not in df_sat.columns:
             for candidate in candidates:
@@ -219,11 +329,36 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
                     break
     if "v_swx" not in df_sat.columns and "forecast_sw_speed" in df_sat.columns:
         rename_map["forecast_sw_speed"] = "v_swx"
+    for canonical, candidates in {
+        "x_gse_km": ("pos_gse_x", "gse_x_km"),
+        "y_gse_km": ("pos_gse_y", "gse_y_km"),
+        "z_gse_km": ("pos_gse_z", "gse_z_km"),
+    }.items():
+        if canonical not in df_sat.columns:
+            for candidate in candidates:
+                if candidate in df_sat.columns:
+                    rename_map[candidate] = canonical
+                    break
     df_sat = df_sat.rename(columns=rename_map)
+    ambiguous_components = {
+        "b_x", "b_y", "b_z", "Bx", "By", "Bz",
+        "magnetic_field_x", "magnetic_field_y", "magnetic_field_z",
+    }.intersection(df_sat.columns)
+    assert not ambiguous_components, (
+        "Magnetic components require an explicit frame in their column names; "
+        f"resolve {sorted(ambiguous_components)} from the source metadata"
+    )
+    for components in (
+        ("b_x_gse", "b_y_gse", "b_z_gse"),
+        ("b_r_rtn", "b_t_rtn", "b_n_rtn"),
+    ):
+        if "b" not in df_sat.columns and set(components).issubset(df_sat.columns):
+            vector = df_sat[list(components)].apply(pd.to_numeric, errors="coerce")
+            df_sat["b"] = np.sqrt((vector ** 2).sum(axis=1, min_count=3))
 
     keep_columns = [
         column for column in SATELLITE_FRAME_COLUMNS if column in df_sat.columns
-    ]
+    ] + [column for column in ACE_GSE_COLUMNS if column in df_sat.columns]
     df_sat = df_sat[keep_columns].sort_index()
     df_sat = df_sat[~df_sat.index.duplicated(keep="last")]
 
@@ -241,7 +376,45 @@ def load_cached_satellite_frame(path, sat, label=None):
     return normalize_satellite_frame(df_sat_raw, sat=sat, label=label)
 
 
-def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
+def load_ace_frame(
+    ace_path=DEFAULT_ACE_PARQUET_PATH,
+    ephemeris_path=DEFAULT_ACE_EPHEMERIS_PATH,
+):
+    frame = load_cached_satellite_frame(
+        ace_path,
+        sat=DEFAULT_ACE_SAT,
+        label=DEFAULT_ACE_LABEL,
+    )
+    if set(("x_hee_au", "y_hee_au", "z_hee_au")).issubset(frame.columns):
+        positions = frame[["x_hee_au", "y_hee_au", "z_hee_au"]]
+        position_source = "native ACE HEE columns"
+    elif set(ACE_GSE_COLUMNS).issubset(frame.columns):
+        positions = _convert_ace_gse_columns_to_hee(frame)
+        position_source = "native ACE GSE columns converted to HEE"
+    else:
+        ephemeris = _load_ace_hee_ephemeris(ephemeris_path)
+        positions = _hee_cartesian_from_gse(
+            ephemeris.index,
+            ephemeris["x_gse_km"],
+            ephemeris["y_gse_km"],
+            ephemeris["z_gse_km"],
+        ).reindex(frame.index).interpolate(method="time")
+        position_source = str(ephemeris_path)
+    missing_positions = positions.isna().any(axis=1)
+    assert not missing_positions.any(), (
+        "Native ACE observations need an HEE position for every sample; "
+        f"missing {int(missing_positions.sum())} rows"
+    )
+    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
+    frame.attrs["coord_frame"] = "HEE"
+    frame.attrs["position_static"] = False
+    frame.attrs["source"] = "ACE"
+    frame.attrs["position_source"] = position_source
+    return frame
+
+
+def load_ace_earth_frame(ace_path=DEFAULT_ACE_AT_EARTH_PARQUET_PATH):
+    """Load the propagated ACE-at-Earth reference at the fixed HEE Earth point."""
     frame = load_cached_satellite_frame(
         ace_path,
         sat=DEFAULT_ACE_EARTH_SAT,
@@ -250,14 +423,16 @@ def load_ace_earth_frame(ace_path=DEFAULT_ACE_PARQUET_PATH):
     frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = (1.0, 0.0, 0.0)
     frame.attrs["coord_frame"] = "HEE"
     frame.attrs["position_static"] = True
+    frame.attrs["source"] = "ACE at Earth"
+    frame.attrs["position_source"] = "fixed Earth point"
     return frame
 
 
 def load_ace_swx_frame(swx_path=DEFAULT_SWX_PARQUET_PATH):
     frame = load_cached_satellite_frame(
         swx_path,
-        sat=DEFAULT_ACE_EARTH_SAT,
-        label=DEFAULT_ACE_EARTH_LABEL,
+        sat=DEFAULT_ACE_SAT,
+        label=DEFAULT_ACE_LABEL,
     )
     assert "v_swx" in frame.columns, f"Missing v_swx column in {swx_path}"
     return frame
@@ -290,15 +465,7 @@ def load_stereo_a_frame(
     max_source_gap=SATELLITE_MAX_SOURCE_GAP,
 ):
     stereo_path = resolve_repo_path(stereo_path)
-    stereo_a_df = pd.read_parquet(
-        stereo_path,
-        columns=[
-            "V",
-            "radialDistance",
-            "heliographicLatitude",
-            "heliographicLongitude",
-        ],
-    ).copy()
+    stereo_a_df = pd.read_parquet(stereo_path).copy()
     stereo_a_df.index = pd.to_datetime(stereo_a_df.index, utc=True).tz_convert(None)
     sampling_margin = max(pd.Timedelta(time_freq), pd.Timedelta(max_source_gap))
     stereo_a_df = stereo_a_df.loc[
@@ -306,19 +473,57 @@ def load_stereo_a_frame(
         - sampling_margin : pd.Timestamp(time_axis.max())
         + sampling_margin
     ]
-    stereo_a_df = stereo_a_df.rename(columns={"V": "v"})
-    for column in stereo_a_df.columns:
-        stereo_a_df[column] = pd.to_numeric(stereo_a_df[column], errors="coerce")
-    stereo_a_df["phi_target"] = stereo_a_df["heliographicLongitude"]
-    stereo_a_df["r_target"] = (
-        stereo_a_df["radialDistance"] / EARTH_RADII_PER_SOLAR_RADIUS
+    stereo_a_df = normalize_satellite_frame(
+        stereo_a_df,
+        sat=DEFAULT_STEREO_A_SAT,
+        label=DEFAULT_STEREO_A_LABEL,
     )
-    stereo_a_df["lat_hgs"] = stereo_a_df["heliographicLatitude"]
     stereo_a_df = stereo_a_df.resample(time_freq).mean()
     stereo_a_df = interpolate_short_gaps(stereo_a_df, time_axis, max_source_gap)
+    required_coordinates = {"heliographicLatitude", "heliographicLongitude", "radialDistance"}
+    raw_coordinates = pd.read_parquet(stereo_path, columns=list(required_coordinates)).copy()
+    raw_coordinates.index = pd.to_datetime(raw_coordinates.index, utc=True).tz_convert(None)
+    raw_coordinates = raw_coordinates.loc[
+        pd.Timestamp(time_axis.min()) - sampling_margin : pd.Timestamp(time_axis.max()) + sampling_margin
+    ]
+    raw_coordinates = raw_coordinates.apply(pd.to_numeric, errors="coerce")
+    raw_coordinates = raw_coordinates.resample(time_freq).mean()
+    raw_coordinates = interpolate_short_gaps(raw_coordinates, time_axis, max_source_gap)
+    radial_distance_solar = (
+        raw_coordinates["radialDistance"] / EARTH_RADII_PER_SOLAR_RADIUS
+    )
+    radius_au = radial_distance_solar * SOLAR_RADIUS_KM / AU_KM
+    positions = _hee_cartesian_from_hgs(
+        raw_coordinates.index,
+        raw_coordinates["heliographicLongitude"],
+        raw_coordinates["heliographicLatitude"],
+        radius_au,
+    )
+    stereo_a_df = stereo_a_df.reindex(time_axis)
+    stereo_a_df[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
+    stereo_a_df["phi_target"] = np.mod(
+        np.degrees(np.arctan2(positions["y_hee_au"], positions["x_hee_au"])),
+        360.0,
+    )
+    stereo_a_df["lat_hee"] = np.degrees(
+        np.arcsin(
+            np.divide(
+                positions["z_hee_au"],
+                np.sqrt((positions ** 2).sum(axis=1)),
+                out=np.full(len(positions), np.nan),
+                where=(positions ** 2).sum(axis=1).to_numpy() > 0.0,
+            )
+        )
+    )
+    stereo_a_df["r_target"] = (
+        radial_distance_solar
+    )
+    stereo_a_df["lat_hgs"] = raw_coordinates["heliographicLatitude"]
     stereo_a_df.attrs["sat"] = DEFAULT_STEREO_A_SAT
     stereo_a_df.attrs["label"] = DEFAULT_STEREO_A_LABEL
-    stereo_a_df.attrs["coord_frame"] = "HGS"
+    stereo_a_df.attrs["coord_frame"] = "HEE"
+    stereo_a_df.attrs["source_coord_frame"] = "HGS"
+    stereo_a_df.attrs["source"] = "STEREO-A PLASTIC"
     return stereo_a_df
 
 
@@ -327,12 +532,15 @@ def load_satellite_frame(
     time_axis=None,
     time_freq=None,
     ace_path=DEFAULT_ACE_PARQUET_PATH,
+    ace_at_earth_path=DEFAULT_ACE_AT_EARTH_PARQUET_PATH,
     stereo_a_path=DEFAULT_STEREO_A_PARQUET_PATH,
 ):
     """Load one configured source in the common satellite-frame schema."""
     config = get_satellite_config(sat_id)
+    if config.loader == "ace":
+        return load_ace_frame(ace_path=ace_path)
     if config.loader == "ace_earth":
-        return load_ace_earth_frame(ace_path=ace_path)
+        return load_ace_earth_frame(ace_path=ace_at_earth_path)
     if config.loader == "stereo_a":
         assert time_axis is not None and time_freq is not None, (
             "STEREO-A loading requires time_axis and time_freq"
@@ -407,8 +615,10 @@ def load_enlil_prediction_frames(
         )
         return pd.DataFrame({"v_noaa": series})
 
+    ace_enlil = build_enlil_frame("Earth_V1")
     return {
-        DEFAULT_ACE_EARTH_SAT: build_enlil_frame("Earth_V1"),
+        DEFAULT_ACE_SAT: ace_enlil,
+        DEFAULT_ACE_EARTH_SAT: ace_enlil.copy(),
         DEFAULT_STEREO_A_SAT: build_enlil_frame("STEREO_A_V1"),
     }
 
@@ -488,7 +698,7 @@ def build_model_input_series(
     }
 
 
-def load_ace_at_earth(ace_path=DEFAULT_ACE_PARQUET_PATH):
+def load_ace_at_earth(ace_path=DEFAULT_ACE_AT_EARTH_PARQUET_PATH):
     df_ace_earth = load_ace_earth_frame(ace_path)
     return df_ace_earth[["v"]].rename(columns={"v": "v_ace"})
 
@@ -500,6 +710,6 @@ def build_ace_earth_swx_frame(sdo_input_df):
         df_swx["v_swx"] = pd.to_numeric(
             sdo_input_df["forecast_sw_speed"], errors="coerce"
         ).to_numpy()
-    df_swx.attrs["sat"] = DEFAULT_ACE_EARTH_SAT
-    df_swx.attrs["label"] = DEFAULT_ACE_EARTH_LABEL
+    df_swx.attrs["sat"] = DEFAULT_ACE_SAT
+    df_swx.attrs["label"] = DEFAULT_ACE_LABEL
     return df_swx.sort_index()

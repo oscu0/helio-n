@@ -71,7 +71,10 @@ class InputContractTests(unittest.TestCase):
             source.to_parquet(path)
             result = load_stereo_a_frame(target, "1h", stereo_path=path)
         self.assertEqual(result.loc[start + pd.Timedelta(hours=1), "v"], 450.0)
-        self.assertEqual(result.loc[start + pd.Timedelta(hours=1), "phi_target"], 10.0)
+        self.assertAlmostEqual(
+            result.loc[start + pd.Timedelta(hours=1), "phi_target"],
+            9.084179165880622,
+        )
         self.assertTrue(result.loc[start + pd.Timedelta(hours=3):start + pd.Timedelta(hours=9), "v"].isna().all())
         self.assertTrue(result.loc[start + pd.Timedelta(hours=3):start + pd.Timedelta(hours=9), "phi_target"].isna().all())
 
@@ -95,7 +98,10 @@ class InputContractTests(unittest.TestCase):
             source.to_parquet(path)
             result = load_stereo_a_frame(target, "1h", stereo_path=path)
         self.assertTrue(np.isnan(result.loc[start + pd.Timedelta(hours=2), "v"]))
-        self.assertEqual(result.loc[start + pd.Timedelta(hours=2), "phi_target"], 10.0)
+        self.assertAlmostEqual(
+            result.loc[start + pd.Timedelta(hours=2), "phi_target"],
+            9.084089475304681,
+        )
 
 
 if __name__ == "__main__":

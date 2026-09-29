@@ -29,7 +29,7 @@ class SatelliteConfig:
 
 
 SATELLITE_CONFIGS = {
-    "ace": SatelliteConfig("ace", "ACE", None),
+    "ace": SatelliteConfig("ace", "ACE", "ace", icme_catalog="unified_earth"),
     "ace_earth": SatelliteConfig(
         "ace_earth", "ACE @ Earth", "ace_earth", icme_catalog="unified_earth"
     ),
@@ -37,11 +37,11 @@ SATELLITE_CONFIGS = {
     "psp": SatelliteConfig("psp", "PSP", None),
     "solo": SatelliteConfig("solo", "Solar Orbiter", None),
     "stereo_a": SatelliteConfig(
-        "stereo_a", "STEREO-A", "stereo_a", coord_frame="HGS", icme_catalog="icmecat_v2.3"
+        "stereo_a", "STEREO-A", "stereo_a", coord_frame="HEE", icme_catalog="icmecat_v2.3"
     ),
     "stereo_b": SatelliteConfig("stereo_b", "STEREO-B", None),
 }
-DEFAULT_ENABLED_SATELLITES = ("ace_earth", "stereo_a")
+DEFAULT_ENABLED_SATELLITES = ("ace", "stereo_a")
 
 
 def get_satellite_config(sat_id):

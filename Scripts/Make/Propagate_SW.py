@@ -49,7 +49,6 @@ def main(argv=None):
     parser.add_argument("--mode", choices=("hindcast", "forecast"), default="hindcast")
     parser.add_argument("--enlil", action="store_true")
     parser.add_argument("--enlil-parquet", type=Path)
-    parser.add_argument("--slow-sw", action="store_true", help="Use the empirical slow-wind patch for ACE")
     parser.add_argument(
         "--satellites",
         default=','.join(DEFAULT_ENABLED_SATELLITES),
@@ -73,6 +72,30 @@ def main(argv=None):
                     "cube.h5", "inputs.parquet", "prepared_inputs.parquet", "series.parquet"
                 ):
                     assert (directory / filename).exists(), f"Incomplete archive: {directory}"
+                archived_series = pd.read_parquet(directory / "series.parquet")
+                archived_satellites = set(
+                    archived_series["satellite"].columns.get_level_values(0)
+                )
+                missing_satellites = set(enabled_satellites) - archived_satellites
+                assert not missing_satellites, (
+                    f"Existing archive lacks enabled satellites {sorted(missing_satellites)}: "
+                    f"{directory}. Use a new archive root to rebuild it."
+                )
+                ace_satellites = {"ace", "ace_earth"}.intersection(enabled_satellites)
+                if ace_satellites:
+                    for ace_sat in ace_satellites:
+                        required_ace_columns = {
+                            ("satellite", ace_sat, "v_predict_raw"),
+                            ("satellite", ace_sat, "v_predict"),
+                            ("satellite", ace_sat, "slow_sw_patch_mask"),
+                        }
+                        missing_ace_columns = required_ace_columns.difference(
+                            archived_series.columns
+                        )
+                        assert not missing_ace_columns, (
+                            f"Existing archive lacks always-on ACE slow-wind series: "
+                            f"{directory}. Use a new archive root to rebuild it."
+                        )
                 print(f"Reusing {directory}")
                 continue
             command = [
@@ -87,8 +110,6 @@ def main(argv=None):
                 command.append("--enlil")
             if args.enlil_parquet is not None:
                 command.extend(("--enlil-parquet", str(args.enlil_parquet)))
-            if args.slow_sw:
-                command.append("--slow-sw")
             command.extend(("--satellites", ",".join(enabled_satellites)))
             subprocess.run(command, check=True)
         return 0
@@ -152,12 +173,11 @@ def main(argv=None):
             grid_raw=speed,
             slow_sw_pred_mask=cube_info.slow_wind_mask,
             df_sat=frame,
-            df_swx=swx if sat == "ace_earth" else None,
+            df_swx=swx if sat in {"ace", "ace_earth"} else None,
             df_noaa=enlil.get(sat),
-            phi_target=ballistic["earth_phi_target"] if sat == "ace_earth" else 0.0,
+            phi_target=ballistic["earth_phi_target"] if sat in {"ace", "ace_earth"} else 0.0,
             r_target=ballistic["earth_r_target"],
             slow_sw_speed=slow_patch_empirical.slow_sw_speed(grid.time_axis),
-            slow_sw_patch=args.slow_sw,
             draw_slow_sw=True,
         )
 
@@ -204,6 +224,7 @@ def main(argv=None):
         ),
         "output_step_minutes": step,
         "satellites": enabled_satellites,
+        "slow_sw_patch_enabled": bool({"ace", "ace_earth"}.intersection(enabled_satellites)),
         "satellite_coord_frame": {
             sat: get_satellite_config(sat).coord_frame
             for sat in enabled_satellites
