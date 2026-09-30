@@ -115,6 +115,17 @@ plots every spacecraft present in the archive. Selection removes both the
 polar marker and time-series panel, without changing archived comparisons.
 The direct `plot_polar_snapshot()` and `export_polar_animation()` calls accept
 the same IDs as a `satellites=[...]` argument (or `[]` for none).
+Each per-CR satellite series also stores `hee_beta_deg` and
+`sdo_observation_age_days`. The latter is elapsed Carrington synodic rotation
+time since the satellite-facing solar longitude last left SDO's visible disk
+(zero while it remains visible). Thin tracks at the bottom of each animation
+speed panel mark ages over 10 days in yellow and `abs(hee_beta_deg) > 10`
+degrees in pink; compact badges mark flags at the current frame. Polar
+satellite markers keep a black fill with a white outline for contrast.
+`Scripts/Make/SW_Report.py` writes a third, minimally formatted
+`SW Satellite Data <range>.xlsx` workbook with one sheet per satellite in the
+reproduction archive; its rows use the same yellow and pink thresholds. The
+existing paper report and CSV outputs are unchanged.
 `SW 4.ipynb` runs a CR 2306 SQL sample through the library functions directly,
 with separate cells for inspecting source inputs, prepared inputs, and the
 in-memory cube. Its sample archive and animation omit satellite comparisons.

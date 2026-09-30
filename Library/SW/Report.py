@@ -137,6 +137,95 @@ CSV_COLUMNS = [
     "stereo_hee_relative_to_ace_longitude_deg",
 ]
 
+SATELLITE_DATA_COLUMNS = {
+    "time_utc": "datetime_utc",
+    "ch_relative_area": "ch_area_relative",
+    "v_predict_raw": "v_forecast",
+    "v_predict": "v_forecast_slow_sw_model",
+    "v_swx": "v_forecast_swx",
+    "v_real": "v_observed",
+    "N": "proton_density_cm3",
+    "t": "proton_temperature_k",
+    "b": "magnetic_field_magnitude_nt",
+    "b_x_gse": "b_x_gse_nt",
+    "b_y_gse": "b_y_gse_nt",
+    "b_z_gse": "b_z_gse_nt",
+    "x_hee_au": "x_hee_au",
+    "y_hee_au": "y_hee_au",
+    "z_hee_au": "z_hee_au",
+    "hee_beta_deg": "hee_beta_deg",
+    "relative_latitude_to_ace_deg": "relative_latitude_to_ace_deg",
+    "relative_longitude_to_ace_deg": "relative_longitude_to_ace_deg",
+    "sdo_observation_age_days": "sdo_observation_age_days",
+    "sdo_age_over_10_days": "sdo_age_over_10_days",
+    "hee_beta_over_10_deg": "hee_beta_over_10_deg",
+}
+
+VARIABLE_DEFINITIONS_SHEET = "Определения"
+VARIABLE_DEFINITIONS_RU = [
+    ("datetime_utc", "UTC", "Метка времени часового интервала в UTC."),
+    (
+        "ch_area_relative",
+        "относительная площадь",
+        "Относительная площадь корональной дыры во входных данных модели; это контекстный параметр, отнесённый ко времени у Солнца.",
+    ),
+    (
+        "v_forecast",
+        "км/с",
+        "Исходный баллистический прогноз скорости до динамической поправки медленного ветра; в расчёте используется базовая скорость медленного ветра 300 км/с.",
+    ),
+    (
+        "v_forecast_slow_sw_model",
+        "км/с",
+        "Прогноз после применения временной модели медленного солнечного ветра. Поправка применяется к ACE в отмеченных интервалах; для остальных спутников совпадает с v_forecast.",
+    ),
+    (
+        "v_forecast_swx",
+        "км/с",
+        "Нативный прогноз SWX для ACE, сохранённый в архиве запуска. Пропуски не заполняются интерполяцией.",
+    ),
+    ("v_observed", "км/с", "Наблюдаемая скорость солнечного ветра у спутника."),
+    ("proton_density_cm3", "см⁻³", "Плотность протонов солнечного ветра."),
+    ("proton_temperature_k", "K", "Температура протонов солнечного ветра."),
+    ("magnetic_field_magnitude_nt", "нТл", "Модуль магнитного поля."),
+    ("b_x_gse_nt", "нТл", "Компонента X магнитного поля в системе GSE."),
+    ("b_y_gse_nt", "нТл", "Компонента Y магнитного поля в системе GSE."),
+    ("b_z_gse_nt", "нТл", "Компонента Z магнитного поля в системе GSE."),
+    ("x_hee_au", "AU", "Координата X спутника в системе HEE."),
+    ("y_hee_au", "AU", "Координата Y спутника в системе HEE."),
+    ("z_hee_au", "AU", "Координата Z спутника в системе HEE."),
+    (
+        "hee_beta_deg",
+        "градусы",
+        "Широта спутника над эклиптикой в системе HEE: atan2(z, sqrt(x² + y²)).",
+    ),
+    (
+        "relative_latitude_to_ace_deg",
+        "градусы",
+        "Широтное угловое положение спутника относительно ACE в системе HEE.",
+    ),
+    (
+        "relative_longitude_to_ace_deg",
+        "градусы",
+        "Долготное угловое положение спутника относительно ACE в системе HEE.",
+    ),
+    (
+        "sdo_observation_age_days",
+        "сутки",
+        "Сколько суток прошло с тех пор, как SDO в последний раз видел солнечную долготу, обращённую к спутнику; во время видимости возраст равен нулю.",
+    ),
+    (
+        "sdo_age_over_10_days",
+        "булево",
+        "TRUE, если возраст наблюдения SDO превышает 10 суток. В таблице такие строки выделены жёлтым.",
+    ),
+    (
+        "hee_beta_over_10_deg",
+        "булево",
+        "TRUE, если модуль широты над эклиптикой превышает 10°. В таблице такие строки выделены розовым.",
+    ),
+]
+
 
 def build_hourly_report_frame(
     reproduction_frame,
@@ -237,6 +326,144 @@ def _relative_hee_angles(stereo_frame, ace_frame, report_index, freq):
         )
     )
     return latitude, longitude
+
+
+def build_satellite_data_frames(
+    reproduction_frame,
+    comparison_frames,
+    start_dt,
+    end_dt,
+    freq="1h",
+):
+    """Build one plain hourly observation/forecast frame per archived satellite."""
+    assert "ace" in comparison_frames, (
+        "Satellite workbook requires native ACE ('ace') for relative coordinates"
+    )
+    report_index = build_eval_index(start_dt=start_dt, end_dt=end_dt, freq=freq)
+    run_frame = reproduction_frame.copy()
+    run_frame.index = pd.to_datetime(run_frame.index)
+    run_frame = run_frame.loc[
+        (run_frame.index >= pd.Timestamp(start_dt))
+        & (run_frame.index < pd.Timestamp(end_dt))
+    ]
+    assert not run_frame.empty, (
+        f"No rows in exact run window [{start_dt}, {end_dt}) after loading "
+        "the matching reproduction parquet"
+    )
+    ch_area_column = ("input", "ch_area", "ch_relative_area")
+    assert ch_area_column in run_frame.columns, (
+        f"Missing reproduction input column {ch_area_column}"
+    )
+    ch_area = _hourly_measurement(run_frame, ch_area_column, report_index, freq)
+
+    ace_frame = comparison_frames["ace"]
+    result = {}
+    for sat_name, source in comparison_frames.items():
+        ambiguous = {"b_x", "b_y", "b_z"}.intersection(source.columns)
+        assert not ambiguous, (
+            f"{sat_name}: magnetic components lack a frame: {sorted(ambiguous)}"
+        )
+        frame = pd.DataFrame(index=report_index)
+        frame["time_utc"] = report_index
+        frame["ch_relative_area"] = ch_area
+        for column in (
+            "v_predict", "v_predict_raw", "v_real", "N", "t", "b",
+            "b_x_gse", "b_y_gse", "b_z_gse", "x_hee_au", "y_hee_au",
+            "z_hee_au", "hee_beta_deg", "sdo_observation_age_days",
+        ):
+            frame[column] = _hourly_measurement(source, column, report_index, freq)
+        if sat_name == "ace":
+            frame["v_swx"] = _hourly_measurement(source, "v_swx", report_index, freq)
+        if sat_name == "ace" and {"x_hee_au", "y_hee_au", "z_hee_au"}.issubset(source.columns):
+            has_position = pd.Series(
+                np.isfinite(source[["x_hee_au", "y_hee_au", "z_hee_au"]]).all(axis=1),
+                index=source.index,
+            ).resample(freq).max().reindex(report_index).fillna(False)
+            relative_lat = pd.Series(np.where(has_position, 0.0, np.nan), index=report_index)
+            relative_lon = relative_lat.copy()
+        elif {"x_hee_au", "y_hee_au", "z_hee_au"}.issubset(source.columns) and {
+            "x_hee_au", "y_hee_au", "z_hee_au"
+        }.issubset(ace_frame.columns):
+            relative_lat, relative_lon = _relative_hee_angles(
+                source, ace_frame, report_index, freq
+            )
+        else:
+            relative_lat = pd.Series(np.nan, index=report_index)
+            relative_lon = pd.Series(np.nan, index=report_index)
+        frame["relative_latitude_to_ace_deg"] = relative_lat
+        frame["relative_longitude_to_ace_deg"] = relative_lon
+        frame["sdo_age_over_10_days"] = frame["sdo_observation_age_days"] > 10.0
+        frame["hee_beta_over_10_deg"] = frame["hee_beta_deg"].abs() > 10.0
+        columns = [
+            column for column in SATELLITE_DATA_COLUMNS
+            if column != "v_swx" or sat_name == "ace"
+        ]
+        result[sat_name] = frame[columns]
+    return result
+
+
+def write_satellite_data_workbook(satellite_frames, output_path):
+    """Write plain per-satellite sheets with compact threshold highlighting."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        for sat_name, frame in satellite_frames.items():
+            sheet_name = str(sat_name).replace("/", "-")[:31]
+            frame.rename(columns=SATELLITE_DATA_COLUMNS).to_excel(
+                writer, sheet_name=sheet_name, index=False
+            )
+            worksheet = writer.book[sheet_name]
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            for cell in worksheet[1]:
+                cell.font = Font(bold=True)
+            headers = {cell.value: cell.column for cell in worksheet[1]}
+            time_column = headers[SATELLITE_DATA_COLUMNS["time_utc"]]
+            age_flag_column = headers[SATELLITE_DATA_COLUMNS["sdo_age_over_10_days"]]
+            beta_flag_column = headers[SATELLITE_DATA_COLUMNS["hee_beta_over_10_deg"]]
+            yellow = PatternFill(fill_type="solid", fgColor="FFFF00")
+            pink = PatternFill(fill_type="solid", fgColor="F4CCCC")
+            for row in range(2, worksheet.max_row + 1):
+                worksheet.cell(row, time_column).number_format = "yyyy-mm-dd hh:mm"
+                age_flag = bool(worksheet.cell(row, age_flag_column).value)
+                beta_flag = bool(worksheet.cell(row, beta_flag_column).value)
+                if age_flag or beta_flag:
+                    row_fill = pink if beta_flag else yellow
+                    for cell in worksheet[row]:
+                        cell.fill = row_fill
+                if age_flag:
+                    worksheet.cell(row, age_flag_column).fill = yellow
+                if beta_flag:
+                    worksheet.cell(row, beta_flag_column).fill = pink
+            worksheet.column_dimensions["A"].width = 21
+            for column, variable in enumerate(frame.columns, start=2):
+                worksheet.column_dimensions[get_column_letter(column)].width = min(
+                    38, max(19, len(SATELLITE_DATA_COLUMNS[variable]) + 2)
+                )
+
+        definitions = pd.DataFrame(
+            VARIABLE_DEFINITIONS_RU,
+            columns=("Переменная", "Единица", "Описание (русский)"),
+        )
+        definitions.to_excel(writer, sheet_name=VARIABLE_DEFINITIONS_SHEET, index=False)
+        worksheet = writer.book[VARIABLE_DEFINITIONS_SHEET]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+        worksheet.column_dimensions["A"].width = 36
+        worksheet.column_dimensions["B"].width = 22
+        worksheet.column_dimensions["C"].width = 90
+        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+        worksheet.page_setup.orientation = "landscape"
+        worksheet.page_setup.fitToWidth = 1
+        worksheet.page_setup.fitToHeight = 0
+        for row in worksheet.iter_rows(min_row=2, min_col=3, max_col=3):
+            row[0].alignment = Alignment(wrap_text=True, vertical="top")
+            worksheet.row_dimensions[row[0].row].height = max(
+                30.0, 15.0 * ((len(str(row[0].value)) + 89) // 90)
+            )
+    return output_path
 
 
 def build_hourly_csv_frame(

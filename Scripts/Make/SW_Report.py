@@ -13,9 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from Library.SW.Report import (  # noqa: E402
     build_hourly_csv_frame,
     build_hourly_report_frame,
+    build_satellite_data_frames,
     write_csv,
     write_report,
+    write_satellite_data_workbook,
 )
+from Library.SW.Config import ALL_VALIDATION_SATELLITES  # noqa: E402
 from Library.SW.Stats import (  # noqa: E402
     restore_observed_and_recurrent_series,
     restore_swx_series,
@@ -55,6 +58,11 @@ def parse_args(argv):
         "--csv-out",
         default=None,
         help="Optional explicit hourly CSV output path.",
+    )
+    parser.add_argument(
+        "--satellite-workbook-out",
+        default=None,
+        help="Optional explicit path for the plain per-satellite Excel workbook.",
     )
     parser.add_argument(
         "--swx-parquet",
@@ -97,17 +105,31 @@ def main(argv):
         if args.csv_out is not None
         else output_dir / f"SW Export {stamp}.csv"
     )
+    satellite_workbook_out = (
+        Path(args.satellite_workbook_out)
+        if args.satellite_workbook_out is not None
+        else output_dir / f"SW Satellite Data {stamp}.xlsx"
+    )
 
     reproduction_frame = pd.read_parquet(reproduction_path)
     reproduction_frame.index = pd.to_datetime(reproduction_frame.index)
     reproduction_frame = reproduction_frame.sort_index().sort_index(axis=1)
-    available_satellites = set(reproduction_frame["satellite"].columns.get_level_values(0))
+    present_satellites = list(dict.fromkeys(
+        reproduction_frame["satellite"].columns.get_level_values(0)
+    ))
+    available_satellites = [
+        sat_name for sat_name in ALL_VALIDATION_SATELLITES
+        if sat_name in present_satellites
+    ] + [
+        sat_name for sat_name in present_satellites
+        if sat_name not in ALL_VALIDATION_SATELLITES
+    ]
     assert "ace" in available_satellites, (
         "Report requires a native ACE archive; ACE-at-Earth cannot be relabelled as ACE"
     )
     comparison_frames = {
         sat_name: reproduction_frame["satellite", sat_name].copy()
-        for sat_name in ["ace", "stereo_a"]
+        for sat_name in available_satellites
         if sat_name in available_satellites
     }
     for frame in comparison_frames.values():
@@ -125,9 +147,26 @@ def main(argv):
             swx_path=args.swx_parquet,
         )
 
-    report_frame = build_hourly_report_frame(
+    satellite_data_frames = build_satellite_data_frames(
         reproduction_frame=reproduction_frame,
         comparison_frames=comparison_frames,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        freq=args.freq,
+    )
+    write_satellite_data_workbook(satellite_data_frames, satellite_workbook_out)
+    paper_comparison_frames = {
+        sat_name: comparison_frames[sat_name]
+        for sat_name in ("ace", "stereo_a")
+        if sat_name in comparison_frames
+    }
+    assert "stereo_a" in paper_comparison_frames, (
+        "The existing report and CSV require STEREO-A"
+    )
+
+    report_frame = build_hourly_report_frame(
+        reproduction_frame=reproduction_frame,
+        comparison_frames=paper_comparison_frames,
         start_dt=start_dt,
         end_dt=end_dt,
         freq=args.freq,
@@ -135,7 +174,7 @@ def main(argv):
     write_report(report_frame, report_out)
     csv_frame = build_hourly_csv_frame(
         reproduction_frame=reproduction_frame,
-        comparison_frames=comparison_frames,
+        comparison_frames=paper_comparison_frames,
         start_dt=start_dt,
         end_dt=end_dt,
         freq=args.freq,
@@ -143,6 +182,7 @@ def main(argv):
     write_csv(csv_frame, csv_out)
     print("Saved SW report:", report_out)
     print("Saved SW CSV export:", csv_out)
+    print("Saved per-satellite workbook:", satellite_workbook_out)
     print(
         "Source:",
         reproduction_path,
