@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from Library.SW.Config import (
     ALL_VALIDATION_SATELLITES,
@@ -23,7 +24,13 @@ from Library.SW.Inputs import (
     load_stereo_a_frame,
     normalize_satellite_frame,
 )
-from Library.SW.Visualization import _build_hee_target_frame
+from Library.SW.Visualization import (
+    _build_hee_target_frame,
+    _update_panel_titles,
+    _update_panel_windows,
+    _update_satellite_markers,
+)
+from matplotlib.transforms import blended_transform_factory
 
 
 class SatelliteConfigTests(unittest.TestCase):
@@ -341,6 +348,66 @@ class SatelliteConfigTests(unittest.TestCase):
             150.0 / (360.0 / rotation_days),
             places=3,
         )
+
+    def test_animation_marks_both_live_satellite_flags(self):
+        current_time = pd.Timestamp("2020-01-01")
+        frame = pd.DataFrame(
+            {
+                "phi_target": [30.0], "r_target": [100.0],
+                "v_predict": [400.0], "sdo_observation_age_days": [11.0],
+                "hee_beta_deg": [-12.0],
+            },
+            index=pd.DatetimeIndex([current_time]),
+        )
+        figure = plt.figure()
+        polar_axis = figure.add_subplot(projection="polar")
+        (marker,) = polar_axis.plot([], [], marker="o", linestyle="None")
+        panel_axis = figure.add_subplot(111)
+        age_badge = panel_axis.text(0.99, 1.04, "SDO >10 d")
+        beta_badge = panel_axis.text(0.80, 1.04, "|β| >10°")
+        flag_transform = blended_transform_factory(
+            panel_axis.transData, panel_axis.transAxes
+        )
+        (age_flag_line,) = panel_axis.plot(
+            [], [], marker="_", linestyle="None", transform=flag_transform
+        )
+        (beta_flag_line,) = panel_axis.plot(
+            [], [], marker="_", linestyle="None", transform=flag_transform
+        )
+        (time_marker,) = panel_axis.plot([], [], color="black")
+        item = {
+            "frame": frame,
+            "panel_frame": frame,
+            "polar_marker": marker,
+            "axis": panel_axis,
+            "label": "Test satellite",
+            "age_flag_badge": age_badge,
+            "beta_flag_badge": beta_badge,
+            "age_flag_line": age_flag_line,
+            "beta_flag_line": beta_flag_line,
+            "time_marker": time_marker,
+            "predict_line": None,
+            "real_line": None,
+            "swx_line": None,
+            "microforecast_line": None,
+            "noaa_line": None,
+            "predict_col": None,
+            "real_col": None,
+            "swx_col": None,
+            "microforecast_col": None,
+            "noaa_col": None,
+        }
+        _update_satellite_markers([item], current_time, np.array([50.0, 150.0]))
+        _update_panel_titles([item], current_time, 20.0, 7.0)
+        _update_panel_windows([item], current_time, 20.0, 7.0)
+        self.assertEqual(marker.get_markerfacecolor(), "black")
+        self.assertEqual(marker.get_markeredgecolor(), "white")
+        self.assertTrue(age_badge.get_visible())
+        self.assertTrue(beta_badge.get_visible())
+        self.assertEqual(list(age_flag_line.get_xdata()), [current_time])
+        self.assertEqual(list(beta_flag_line.get_xdata()), [current_time])
+        self.assertIn("CH transit=", panel_axis.get_title(loc="left"))
+        plt.close(figure)
 
     def test_hgs_lookup_uses_source_longitude_not_hee_position(self):
         start = pd.Timestamp("2018-11-13 00:00")

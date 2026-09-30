@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.transforms import blended_transform_factory
 from tqdm.auto import tqdm
 
 from Library.SW.Archive import cr_for_time
@@ -30,6 +31,10 @@ SECONDS_PER_DAY = 86400.0
 AGE_SAMPLE_TOLERANCE = pd.Timedelta(hours=12)
 EXPORT_PLOT_FREQ = "1h"
 HEE_COORDINATE_COLUMNS = ("x_hee_au", "y_hee_au", "z_hee_au")
+SDO_AGE_FLAG_DAYS = 10.0
+HEE_BETA_FLAG_DEG = 10.0
+SDO_AGE_FLAG_COLOR = "#F4D03F"
+HEE_BETA_FLAG_COLOR = "#E78AC3"
 
 
 def find_axis_index(axis_values, target):
@@ -480,6 +485,8 @@ def _build_satellite_plot_items(comparison_frames):
                 PREDICT_COLUMN,
                 REAL_COLUMN,
                 NOAA_COLUMN,
+                "sdo_observation_age_days",
+                "hee_beta_deg",
             )
             if column in frame.columns
         ]
@@ -551,15 +558,12 @@ def _resolve_age_inputs(frame, current_time):
     return float(nearest_row["phi_target"]), float(nearest_row["v_predict"])
 
 
-def _format_satellite_panel_title(label, window_before_days, window_after_days, age_days):
+def _format_satellite_panel_title(label, age_days):
     if np.isfinite(age_days):
-        age_text = f"age={age_days:.2f} d"
+        age_text = f"CH transit={age_days:.2f} d"
     else:
-        age_text = "age=n/a"
-    return (
-        f"   {label} ({age_text}): "
-        f"t-{float(window_before_days):.0f}d to t+{float(window_after_days):.0f}d"
-    )
+        age_text = "CH transit=n/a"
+    return f"   {label} ({age_text})"
 
 
 def _resolve_panel_ylim(sat_items):
@@ -598,9 +602,12 @@ def _update_satellite_markers(sat_items, current_time, r_axis):
         if current_time not in sat_frame.index:
             sat_item["polar_marker"].set_data([], [])
             continue
-        phi_value = float(sat_frame.loc[current_time, "phi_target"])
-        r_value = float(np.clip(float(sat_frame.loc[current_time, "r_target"]), r_min, r_max - 0.75))
+        row = sat_frame.loc[current_time]
+        phi_value = float(row["phi_target"])
+        r_value = float(np.clip(float(row["r_target"]), r_min, r_max - 0.75))
         sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
+        sat_item["polar_marker"].set_markerfacecolor("black")
+        sat_item["polar_marker"].set_markeredgecolor("white")
 
 
 def _update_panel_titles(sat_items, current_time, window_before_days, window_after_days):
@@ -616,12 +623,22 @@ def _update_panel_titles(sat_items, current_time, window_before_days, window_aft
         sat_item["axis"].set_title(
             _format_satellite_panel_title(
                 sat_item["label"],
-                window_before_days=window_before_days,
-                window_after_days=window_after_days,
                 age_days=age_days,
             ),
             fontsize=10,
             loc="left",
+        )
+        row = sat_frame.loc[current_time] if current_time in sat_frame.index else None
+        age_days = (
+            float(row.get("sdo_observation_age_days", np.nan))
+            if row is not None else np.nan
+        )
+        beta_deg = float(row.get("hee_beta_deg", np.nan)) if row is not None else np.nan
+        sat_item["age_flag_badge"].set_visible(
+            np.isfinite(age_days) and age_days > SDO_AGE_FLAG_DAYS
+        )
+        sat_item["beta_flag_badge"].set_visible(
+            np.isfinite(beta_deg) and abs(beta_deg) > HEE_BETA_FLAG_DEG
         )
 
 
@@ -653,6 +670,27 @@ def _update_panel_windows(sat_items, current_time, window_before_days, window_af
             sat_item["noaa_line"].set_data(_noaa.index, _noaa.values)
         sat_item["time_marker"].set_xdata([current_time, current_time])
         sat_item["axis"].set_xlim(window_start, window_end)
+        age_days = pd.to_numeric(
+            compare_window.get(
+                "sdo_observation_age_days",
+                pd.Series(np.nan, index=compare_window.index),
+            ),
+            errors="coerce",
+        )
+        beta_deg = pd.to_numeric(
+            compare_window.get(
+                "hee_beta_deg", pd.Series(np.nan, index=compare_window.index)
+            ),
+            errors="coerce",
+        )
+        age_times = compare_window.index[age_days.to_numpy() > SDO_AGE_FLAG_DAYS]
+        beta_times = compare_window.index[beta_deg.abs().to_numpy() > HEE_BETA_FLAG_DEG]
+        sat_item["age_flag_line"].set_data(
+            age_times, np.full(len(age_times), 0.035)
+        )
+        sat_item["beta_flag_line"].set_data(
+            beta_times, np.full(len(beta_times), 0.075)
+        )
 
 
 def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, window_after_days, y_lim):
@@ -664,6 +702,33 @@ def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, wi
         sat_item["swx_line"] = None
         sat_item["microforecast_line"] = None
         sat_item["noaa_line"] = None
+        sat_item["age_flag_badge"] = sat_axis.text(
+            0.99, 1.04, "SDO >10 d", transform=sat_axis.transAxes,
+            ha="right", va="bottom", fontsize=7, color="#333333",
+            bbox={"boxstyle": "round,pad=0.18", "facecolor": SDO_AGE_FLAG_COLOR,
+                  "edgecolor": "none", "alpha": 0.9},
+        )
+        sat_item["beta_flag_badge"] = sat_axis.text(
+            0.80, 1.04, "|β| >10°", transform=sat_axis.transAxes,
+            ha="right", va="bottom", fontsize=7, color="#333333",
+            bbox={"boxstyle": "round,pad=0.18", "facecolor": HEE_BETA_FLAG_COLOR,
+                  "edgecolor": "none", "alpha": 0.9},
+        )
+        sat_item["age_flag_badge"].set_visible(False)
+        sat_item["beta_flag_badge"].set_visible(False)
+        flag_track_transform = blended_transform_factory(
+            sat_axis.transData, sat_axis.transAxes
+        )
+        (sat_item["age_flag_line"],) = sat_axis.plot(
+            [], [], linestyle="None", marker="_", markersize=7,
+            markeredgewidth=2.0, color=SDO_AGE_FLAG_COLOR,
+            transform=flag_track_transform, clip_on=False, label="SDO age >10d",
+        )
+        (sat_item["beta_flag_line"],) = sat_axis.plot(
+            [], [], linestyle="None", marker="_", markersize=7,
+            markeredgewidth=2.0, color=HEE_BETA_FLAG_COLOR,
+            transform=flag_track_transform, clip_on=False, label="|β| >10°",
+        )
         sat_item["time_marker"] = sat_axis.axvline(
             current_time, color="black", linestyle="--", linewidth=1.0, alpha=0.7
         )
@@ -681,12 +746,12 @@ def _initialize_panels(sat_axes, sat_items, current_time, window_before_days, wi
         sat_axis.plot(
             [0.012], [1.035], transform=sat_axis.transAxes,
             linestyle="None", marker=sat_item["marker"],
-            color="black", markerfacecolor="black", markeredgecolor="black",
-            markersize=7, clip_on=False,
+            color="black", markerfacecolor="black", markeredgecolor="white",
+            markeredgewidth=1.5, markersize=7, clip_on=False,
         )
         sat_axis.grid(alpha=0.25)
         sat_axis.set_ylim(*y_lim)
-        sat_axis.legend(loc="upper left", fontsize=8)
+        sat_axis.legend(loc="upper left", fontsize=7, ncol=2)
         if sat_idx < len(sat_items) - 1:
             sat_axis.tick_params(labelbottom=False)
         sat_axis.tick_params(axis="x", labelsize=8)
@@ -805,8 +870,8 @@ def _build_polar_view(
         (sat_item["polar_marker"],) = polar_ax.plot(
             [], [], linestyle="None",
             marker=sat_item["marker"],
-            color="black", markerfacecolor="black", markeredgecolor="black",
-            markersize=9, clip_on=False, zorder=6,
+            color="black", markerfacecolor="black", markeredgecolor="white",
+            markeredgewidth=1.5, markersize=9, clip_on=False, zorder=6,
         )
     _update_satellite_markers(sat_items, init_time, r_axis)
 
@@ -814,8 +879,8 @@ def _build_polar_view(
         plt.Line2D(
             [], [], linestyle="None",
             marker=sat_item["marker"],
-            color="black", markerfacecolor="black", markeredgecolor="black",
-            markersize=8, label=sat_item["label"],
+            color="black", markerfacecolor="black", markeredgecolor="white",
+            markeredgewidth=1.5, markersize=8, label=sat_item["label"],
         )
         for sat_item in sat_items
     ]
