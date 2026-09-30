@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from astropy import units as u
@@ -12,7 +13,7 @@ from sunpy.coordinates.frames import (
 )
 
 import userpwd
-from Library.Paths import data_path, resolve_repo_path
+from Library.Paths import PROJECT_ROOT, data_path, resolve_repo_path
 from Library.SW.Constants import SW_MODEL_V2_HANDOFF
 from Library.SW.Constants import SOLAR_RADIUS_KM
 from Library.SW.Config import get_satellite_config
@@ -49,6 +50,9 @@ DEFAULT_ACE_AT_EARTH_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
 # https://izw1.caltech.edu/ACE/ASC/DATA/pos_att/ACE_GSE_position.txt
 DEFAULT_ACE_EPHEMERIS_PATH = data_path("ACE GSE position.txt")
 DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A PLASTIC.parquet")
+DEFAULT_CDAWEB_ARCHIVE_ROOT = (
+    PROJECT_ROOT.parent / "Shock-and-Awe" / "Data" / "CDAWeb Archive"
+)
 # 5,087 native forecast_dt/forecast_sw_speed points from
 # sdo.sdo_sw_forecast_0193p over [2018-01-01, 2019-01-01), without interpolation.
 DEFAULT_SWX_PARQUET_PATH = data_path("SWX Forecast 2018.parquet")
@@ -59,6 +63,12 @@ DEFAULT_ACE_EARTH_SAT = "ace_earth"
 DEFAULT_ACE_EARTH_LABEL = "ACE @ Earth"
 DEFAULT_STEREO_A_SAT = "stereo_a"
 DEFAULT_STEREO_A_LABEL = "STEREO-A"
+CDAWEB_MISSION_BY_SATELLITE = {
+    "stereo_a": "stereo-a",
+    "stereo_b": "stereo-b",
+    "psp": "psp",
+    "solo": "solo",
+}
 EARTH_RADII_PER_SOLAR_RADIUS = 109.0763707060096
 SATELLITE_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
 SATELLITE_FRAME_COLUMNS = [
@@ -69,6 +79,9 @@ SATELLITE_FRAME_COLUMNS = [
     "v_x",
     "v_y",
     "v_z",
+    "v_x_gse",
+    "v_y_gse",
+    "v_z_gse",
     "N",
     "t",
     "b",
@@ -82,6 +95,84 @@ SATELLITE_FRAME_COLUMNS = [
 ]
 ACE_GSE_COLUMNS = ("x_gse_km", "y_gse_km", "z_gse_km")
 AU_KM = 149597870.7
+EARTH_RADIUS_KM = 6378.0
+CDAWEB_MISSION_WINDOWS = {
+    "stereo-b": (
+        pd.Timestamp("2007-01-01T00:00:00Z"),
+        pd.Timestamp("2014-09-27T17:00:00Z"),
+    ),
+    "psp": (pd.Timestamp("2018-08-12T00:00:00Z"), None),
+    "solo": (pd.Timestamp("2020-02-10T00:00:00Z"), None),
+}
+
+
+def _utc_timestamp(value):
+    timestamp = pd.Timestamp(value)
+    return timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def find_cdaweb_merged_product(archive_root, mission, start_dt, end_dt):
+    """Find the smallest merged mission product covering a half-open interval."""
+    archive_root = resolve_repo_path(archive_root)
+    merged_dir = archive_root if archive_root.name == "merged" else archive_root / "merged"
+    start = _utc_timestamp(start_dt)
+    end = _utc_timestamp(end_dt)
+    mission_start, mission_end = CDAWEB_MISSION_WINDOWS.get(mission, (None, None))
+    available_start = max(start, mission_start) if mission_start is not None else start
+    available_end = min(end, mission_end) if mission_end is not None else end
+
+    candidates = []
+    for path in merged_dir.glob(f"{mission}_*.parquet"):
+        bounds = path.stem.removeprefix(f"{mission}_").split("_")
+        if len(bounds) != 2:
+            continue
+        try:
+            product_start, product_end = (
+                pd.to_datetime(value, format="%Y%m%dT%H%M%S", utc=True)
+                for value in bounds
+            )
+        except ValueError:
+            continue
+        if available_start >= available_end:
+            candidates.append((product_end - product_start, path))
+        elif product_start <= available_start and available_end <= product_end:
+            candidates.append((product_end - product_start, path))
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"No merged CDAWeb {mission} product in {merged_dir} covers "
+            f"[{start}, {end}); merge the required mission archive first"
+        )
+    return min(candidates, key=lambda item: (item[0], item[1].name))[1]
+
+
+def load_cdaweb_merged_frame(archive_root, mission, start_dt, end_dt):
+    path = find_cdaweb_merged_product(archive_root, mission, start_dt, end_dt)
+    start = _utc_timestamp(start_dt)
+    end = _utc_timestamp(end_dt)
+    mission_start, mission_end = CDAWEB_MISSION_WINDOWS.get(mission, (None, None))
+    start = max(start, mission_start) if mission_start is not None else start
+    end = min(end, mission_end) if mission_end is not None else end
+    if start >= end:
+        product_bounds = path.stem.removeprefix(f"{mission}_").split("_")
+        start = end = pd.to_datetime(product_bounds[0], format="%Y%m%dT%H%M%S", utc=True)
+    frame = pd.read_parquet(
+        path,
+        filters=[("Epoch", ">=", start), ("Epoch", "<", end)],
+    ).copy()
+    frame.index = pd.to_datetime(frame.index, utc=True).tz_convert(None)
+    frame.index.name = "Epoch"
+    frame.attrs["archive_path"] = str(path)
+    frame.attrs["archive_sha256"] = _sha256_file(path)
+    return frame
 
 
 def iter_year_windows(start_dt, end_dt):
@@ -277,6 +368,11 @@ def _load_ace_hee_ephemeris(path):
 
 
 def _convert_ace_gse_columns_to_hee(frame):
+    converted = _transform_ace_gse_columns_to_hee(frame)
+    return converted.interpolate(method="time")
+
+
+def _transform_ace_gse_columns_to_hee(frame):
     gse = frame[list(ACE_GSE_COLUMNS)].dropna()
     if gse.empty:
         return pd.DataFrame(
@@ -290,7 +386,7 @@ def _convert_ace_gse_columns_to_hee(frame):
         gse["y_gse_km"],
         gse["z_gse_km"],
     )
-    return converted.reindex(frame.index).interpolate(method="time")
+    return converted.reindex(frame.index)
 
 
 def normalize_satellite_frame(df_sat_raw, sat, label=None):
@@ -312,8 +408,8 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
                 rename_map[candidate] = "v"
                 break
     for canonical, candidates in {
-        "N": ("density", "n"),
-        "t": ("temperature", "temp"),
+        "N": ("N_p", "density", "n"),
+        "t": ("T_p", "temperature", "temp"),
         "b": ("B", "b_total", "magnetic_field_magnitude"),
         "b_x_gse": ("B_X_GSE",),
         "b_y_gse": ("B_Y_GSE",),
@@ -321,6 +417,9 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
         "b_r_rtn": ("b_r", "Br"),
         "b_t_rtn": ("b_t", "Bt"),
         "b_n_rtn": ("b_n", "Bn"),
+        "v_x_gse": ("V_X_GSE",),
+        "v_y_gse": ("V_Y_GSE",),
+        "v_z_gse": ("V_Z_GSE",),
     }.items():
         if canonical not in df_sat.columns:
             for candidate in candidates:
@@ -527,6 +626,102 @@ def load_stereo_a_frame(
     return stereo_a_df
 
 
+def load_cdaweb_ace_frame(archive_root, time_axis, time_freq):
+    margin = max(pd.Timedelta(time_freq), SATELLITE_MAX_SOURCE_GAP)
+    source = load_cdaweb_merged_frame(
+        archive_root,
+        "ace",
+        pd.Timestamp(time_axis.min()) - margin,
+        pd.Timestamp(time_axis.max()) + margin,
+    )
+    required = {"B_X_GSE", "B_Y_GSE", "B_Z_GSE", "B", "V", "N_p", "X_GSE", "Y_GSE", "Z_GSE"}
+    missing = required.difference(source.columns)
+    assert not missing, f"Merged CDAWeb ACE product lacks columns: {sorted(missing)}"
+    source["x_gse_km"] = pd.to_numeric(source["X_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    source["y_gse_km"] = pd.to_numeric(source["Y_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    source["z_gse_km"] = pd.to_numeric(source["Z_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    frame = normalize_satellite_frame(source, DEFAULT_ACE_SAT, DEFAULT_ACE_LABEL)
+    frame = frame.resample(time_freq).mean()
+    frame = interpolate_short_gaps(frame, time_axis)
+    positions = _transform_ace_gse_columns_to_hee(frame)
+    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
+    frame.attrs.update(source.attrs)
+    frame.attrs["coord_frame"] = "HEE"
+    frame.attrs["position_static"] = False
+    frame.attrs["source"] = "CDAWeb merged ACE"
+    frame.attrs["position_source"] = "merged GSE position in Earth radii"
+    return frame
+
+
+def load_cdaweb_coho_frame(archive_root, sat_id, time_axis, time_freq):
+    mission = CDAWEB_MISSION_BY_SATELLITE[sat_id]
+    margin = max(pd.Timedelta(time_freq), SATELLITE_MAX_SOURCE_GAP)
+    source = load_cdaweb_merged_frame(
+        archive_root,
+        mission,
+        pd.Timestamp(time_axis.min()) - margin,
+        pd.Timestamp(time_axis.max()) + margin,
+    )
+    required = {
+        "B_X_GSE", "B_Y_GSE", "B_Z_GSE", "B", "N_p", "V", "T_p",
+        "X_GSE", "Y_GSE", "Z_GSE", "radialDistance",
+    }
+    if mission in {"psp", "solo"}:
+        required.update({"V_X_GSE", "V_Y_GSE", "V_Z_GSE"})
+    missing = required.difference(source.columns)
+    assert not missing, f"Merged CDAWeb {mission} product lacks columns: {sorted(missing)}"
+    source["x_gse_km"] = pd.to_numeric(source["X_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    source["y_gse_km"] = pd.to_numeric(source["Y_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    source["z_gse_km"] = pd.to_numeric(source["Z_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    radial_distance = pd.to_numeric(source["radialDistance"], errors="coerce")
+    config = get_satellite_config(sat_id)
+    frame = normalize_satellite_frame(source, sat_id, config.label)
+    frame = frame.resample(time_freq).mean()
+    frame = interpolate_short_gaps(frame, time_axis)
+    radial_distance = interpolate_short_gaps(
+        radial_distance.to_frame("radialDistance").resample(time_freq).mean(),
+        time_axis,
+    )["radialDistance"]
+    positions = _hee_cartesian_from_gse(
+        frame.index,
+        frame["x_gse_km"],
+        frame["y_gse_km"],
+        frame["z_gse_km"],
+    )
+    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
+    frame["phi_target"] = np.mod(
+        np.degrees(np.arctan2(positions["y_hee_au"], positions["x_hee_au"])),
+        360.0,
+    )
+    frame["lat_hee"] = np.degrees(
+        np.arcsin(
+            np.divide(
+                positions["z_hee_au"],
+                np.sqrt((positions ** 2).sum(axis=1)),
+                out=np.full(len(positions), np.nan),
+                where=(positions ** 2).sum(axis=1).to_numpy() > 0.0,
+            )
+        )
+    )
+    frame["r_target"] = radial_distance / EARTH_RADII_PER_SOLAR_RADIUS
+    frame.attrs.update(source.attrs)
+    frame.attrs["sat"] = sat_id
+    frame.attrs["label"] = config.label
+    frame.attrs["coord_frame"] = "HEE"
+    frame.attrs["source_coord_frame"] = "GSE"
+    frame.attrs["source"] = f"CDAWeb merged {config.label}"
+    frame.attrs["position_source"] = (
+        "merged COHO position in Earth radii"
+        if mission == "stereo-a"
+        else "JPL Horizons position in Earth radii"
+    )
+    return frame
+
+
+def load_cdaweb_stereo_a_frame(archive_root, time_axis, time_freq):
+    return load_cdaweb_coho_frame(archive_root, "stereo_a", time_axis, time_freq)
+
+
 def load_satellite_frame(
     sat_id,
     time_axis=None,
@@ -534,17 +729,29 @@ def load_satellite_frame(
     ace_path=DEFAULT_ACE_PARQUET_PATH,
     ace_at_earth_path=DEFAULT_ACE_AT_EARTH_PARQUET_PATH,
     stereo_a_path=DEFAULT_STEREO_A_PARQUET_PATH,
+    validation_archive_root=DEFAULT_CDAWEB_ARCHIVE_ROOT,
 ):
     """Load one configured source in the common satellite-frame schema."""
     config = get_satellite_config(sat_id)
     if config.loader == "ace":
+        if validation_archive_root is not None:
+            assert time_axis is not None and time_freq is not None, (
+                "CDAWeb ACE loading requires time_axis and time_freq"
+            )
+            return load_cdaweb_ace_frame(validation_archive_root, time_axis, time_freq)
         return load_ace_frame(ace_path=ace_path)
     if config.loader == "ace_earth":
         return load_ace_earth_frame(ace_path=ace_at_earth_path)
-    if config.loader == "stereo_a":
+    if config.loader == "cdaweb_coho":
         assert time_axis is not None and time_freq is not None, (
-            "STEREO-A loading requires time_axis and time_freq"
+            f"{config.label} loading requires time_axis and time_freq"
         )
+        if validation_archive_root is not None:
+            return load_cdaweb_coho_frame(
+                validation_archive_root, sat_id, time_axis, time_freq
+            )
+        if sat_id != "stereo_a":
+            raise ValueError(f"No legacy data loader configured for {sat_id}")
         return load_stereo_a_frame(
             time_axis=time_axis,
             time_freq=time_freq,
@@ -553,12 +760,18 @@ def load_satellite_frame(
     raise ValueError(f"No data loader configured for satellite: {sat_id}")
 
 
-def load_satellite_frames(satellite_ids, time_axis, time_freq):
+def load_satellite_frames(
+    satellite_ids,
+    time_axis,
+    time_freq,
+    validation_archive_root=DEFAULT_CDAWEB_ARCHIVE_ROOT,
+):
     return {
         sat_id: load_satellite_frame(
             sat_id=sat_id,
             time_axis=time_axis,
             time_freq=time_freq,
+            validation_archive_root=validation_archive_root,
         )
         for sat_id in satellite_ids
     }

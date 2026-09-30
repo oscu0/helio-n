@@ -34,14 +34,15 @@ SATELLITE_CONFIGS = {
         "ace_earth", "ACE @ Earth", "ace_earth", icme_catalog="unified_earth"
     ),
     "earth": SatelliteConfig("earth", "Earth", None),
-    "psp": SatelliteConfig("psp", "PSP", None),
-    "solo": SatelliteConfig("solo", "Solar Orbiter", None),
+    "psp": SatelliteConfig("psp", "PSP", "cdaweb_coho"),
+    "solo": SatelliteConfig("solo", "Solar Orbiter", "cdaweb_coho"),
     "stereo_a": SatelliteConfig(
-        "stereo_a", "STEREO-A", "stereo_a", coord_frame="HEE", icme_catalog="icmecat_v2.3"
+        "stereo_a", "STEREO-A", "cdaweb_coho", coord_frame="HEE", icme_catalog="icmecat_v2.3"
     ),
-    "stereo_b": SatelliteConfig("stereo_b", "STEREO-B", None),
+    "stereo_b": SatelliteConfig("stereo_b", "STEREO-B", "cdaweb_coho"),
 }
 DEFAULT_ENABLED_SATELLITES = ("ace", "stereo_a")
+ALL_VALIDATION_SATELLITES = ("ace", "stereo_a", "stereo_b", "psp", "solo")
 
 
 def get_satellite_config(sat_id):
@@ -58,6 +59,8 @@ def parse_satellite_ids(value=None):
         return list(DEFAULT_ENABLED_SATELLITES)
     if value == "none":
         return []
+    if value == "all":
+        return list(ALL_VALIDATION_SATELLITES)
     satellite_ids = [item.strip() for item in str(value).split(",")]
     assert all(satellite_ids), "Satellite selection contains an empty ID"
     for sat_id in satellite_ids:

@@ -6,11 +6,20 @@ import numpy as np
 import pandas as pd
 
 from Library.SW.Config import (
+    ALL_VALIDATION_SATELLITES,
     DEFAULT_ENABLED_SATELLITES,
     SATELLITE_CONFIGS,
     parse_satellite_ids,
 )
-from Library.SW.Inputs import load_ace_earth_frame, load_ace_frame, load_stereo_a_frame, normalize_satellite_frame
+from Library.SW.Inputs import (
+    find_cdaweb_merged_product,
+    load_ace_earth_frame,
+    load_ace_frame,
+    load_cdaweb_ace_frame,
+    load_satellite_frames,
+    load_stereo_a_frame,
+    normalize_satellite_frame,
+)
 from Library.SW.Visualization import _build_hee_target_frame
 
 
@@ -22,6 +31,7 @@ class SatelliteConfigTests(unittest.TestCase):
         )
         self.assertEqual(parse_satellite_ids(None), list(DEFAULT_ENABLED_SATELLITES))
         self.assertEqual(list(DEFAULT_ENABLED_SATELLITES), ["ace", "stereo_a"])
+        self.assertEqual(parse_satellite_ids("all"), list(ALL_VALIDATION_SATELLITES))
         self.assertEqual(parse_satellite_ids("stereo_a,ace_earth"), ["stereo_a", "ace_earth"])
         self.assertEqual(SATELLITE_CONFIGS["ace"].label, "ACE")
         self.assertEqual(SATELLITE_CONFIGS["ace_earth"].label, "ACE @ Earth")
@@ -140,6 +150,159 @@ class SatelliteConfigTests(unittest.TestCase):
         self.assertEqual(result.attrs["source_coord_frame"], "HGS")
         self.assertNotEqual(result.loc[start, "phi_target"], -100.0)
         self.assertEqual(result.loc[start, "lat_hgs"], 5.0)
+
+    def test_cdaweb_merged_products_are_the_validation_source(self):
+        start = pd.Timestamp("2021-01-01 12:00")
+        time_axis = pd.date_range(start, periods=2, freq="1h")
+        source_index = pd.date_range(
+            start - pd.Timedelta(hours=8),
+            periods=18,
+            freq="1h",
+            tz="UTC",
+            name="Epoch",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "CDAWeb Archive"
+            merged = root / "merged"
+            merged.mkdir(parents=True)
+            ace_path = merged / "ace_20210101T000000_20210103T000000.parquet"
+            stereo_path = merged / "stereo-a_20210101T000000_20210103T000000.parquet"
+            ace = pd.DataFrame(
+                {
+                    "B_X_GSE": 3.0,
+                    "B_Y_GSE": 4.0,
+                    "B_Z_GSE": 0.0,
+                    "B": 5.0,
+                    "V": 410.0,
+                    "N_p": 6.0,
+                    "X_GSE": 30.0,
+                    "Y_GSE": 2.0,
+                    "Z_GSE": -1.0,
+                },
+                index=source_index,
+            )
+            stereo = pd.DataFrame(
+                {
+                    "B_X_GSE": 1.0,
+                    "B_Y_GSE": 2.0,
+                    "B_Z_GSE": 2.0,
+                    "B": 3.0,
+                    "N_p": 7.0,
+                    "V": 420.0,
+                    "T_p": 90000.0,
+                    "X_GSE": 20000.0,
+                    "Y_GSE": -4000.0,
+                    "Z_GSE": 300.0,
+                    "radialDistance": 23000.0,
+                },
+                index=source_index,
+            )
+            stereo_b_index = pd.date_range(
+                "2013-01-01", periods=18, freq="1h", tz="UTC", name="Epoch"
+            )
+            stereo_b = stereo.set_axis(stereo_b_index)
+            psp = stereo.assign(V_X_GSE=10.0, V_Y_GSE=20.0, V_Z_GSE=30.0)
+            solo = psp.copy()
+            ace.to_parquet(ace_path)
+            stereo.to_parquet(stereo_path)
+            stereo_b.to_parquet(merged / "stereo-b_20100101T000000_20140927T170000.parquet")
+            psp.to_parquet(merged / "psp_20180812T000000_20260101T000000.parquet")
+            solo.to_parquet(merged / "solo_20200210T000000_20260101T000000.parquet")
+            (root / "chunks" / "ace").mkdir(parents=True)
+
+            frames = load_satellite_frames(
+                list(ALL_VALIDATION_SATELLITES),
+                time_axis=time_axis,
+                time_freq="1h",
+                validation_archive_root=root,
+            )
+
+            stereo_b_frame = load_satellite_frames(
+                ["stereo_b"],
+                time_axis=pd.date_range("2013-01-01 08:00", periods=2, freq="1h"),
+                time_freq="1h",
+                validation_archive_root=root,
+            )["stereo_b"]
+
+        ace_frame = frames["ace"]
+        stereo_frame = frames["stereo_a"]
+        self.assertEqual(ace_frame.loc[start, "v"], 410.0)
+        self.assertEqual(ace_frame.loc[start, "N"], 6.0)
+        self.assertEqual(ace_frame.loc[start, "b_x_gse"], 3.0)
+        self.assertNotEqual(ace_frame.loc[start, "x_hee_au"], 1.0)
+        self.assertEqual(ace_frame.attrs["source"], "CDAWeb merged ACE")
+        self.assertEqual(ace_frame.attrs["position_source"], "merged GSE position in Earth radii")
+        self.assertEqual(stereo_frame.loc[start, "v"], 420.0)
+        self.assertEqual(stereo_frame.loc[start, "t"], 90000.0)
+        self.assertEqual(stereo_frame.attrs["source_coord_frame"], "GSE")
+        self.assertEqual(stereo_frame.attrs["source"], "CDAWeb merged STEREO-A")
+        self.assertTrue(stereo_frame.attrs["archive_path"].endswith(stereo_path.name))
+        for sat_id in ("psp", "solo"):
+            self.assertEqual(frames[sat_id].loc[start, "v"], 420.0)
+            self.assertEqual(frames[sat_id].loc[start, "v_x_gse"], 10.0)
+            self.assertEqual(frames[sat_id].attrs["coord_frame"], "HEE")
+        self.assertTrue(frames["stereo_b"]["v"].isna().all())
+        self.assertEqual(stereo_b_frame.loc[pd.Timestamp("2013-01-01 08:00"), "v"], 420.0)
+        self.assertEqual(stereo_b_frame.attrs["source"], "CDAWeb merged STEREO-B")
+
+    def test_cdaweb_discovery_does_not_read_intermediate_chunks(self):
+        start = pd.Timestamp("2018-01-01", tz="UTC")
+        end = pd.Timestamp("2018-01-02", tz="UTC")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "CDAWeb Archive"
+            chunk_dir = root / "chunks" / "ace"
+            chunk_dir.mkdir(parents=True)
+            (chunk_dir / "20180101T000000_20180103T000000.parquet").touch()
+            with self.assertRaisesRegex(FileNotFoundError, "merged CDAWeb ace product"):
+                find_cdaweb_merged_product(root, "ace", start, end)
+
+    def test_merged_ace_interpolates_only_gaps_up_to_six_hours(self):
+        start = pd.Timestamp("2021-01-01 00:00")
+        time_axis = pd.date_range(start, periods=13, freq="1h")
+        source_index = pd.date_range(
+            start, periods=13, freq="1h", tz="UTC", name="Epoch"
+        )
+        speed = np.full(len(source_index), 500.0)
+        speed[0] = 300.0
+        speed[1:6] = np.nan
+        speed[6] = 600.0
+        density = np.full(len(source_index), 5.0)
+        density[1:7] = np.nan
+        x_gse = np.full(len(source_index), 30.0)
+        x_gse[1:7] = np.nan
+        source = pd.DataFrame(
+            {
+                "B_X_GSE": 3.0,
+                "B_Y_GSE": 4.0,
+                "B_Z_GSE": 0.0,
+                "B": 5.0,
+                "V": speed,
+                "N_p": density,
+                "X_GSE": x_gse,
+                "Y_GSE": 2.0,
+                "Z_GSE": -1.0,
+            },
+            index=source_index,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "CDAWeb Archive"
+            merged = root / "merged"
+            merged.mkdir(parents=True)
+            path = merged / "ace_20201231T000000_20210102T000000.parquet"
+            source.to_parquet(path)
+
+            frame = load_cdaweb_ace_frame(root, time_axis, "1h")
+
+        self.assertEqual(frame.index.tolist(), time_axis.tolist())
+        self.assertEqual(frame.loc[start + pd.Timedelta(hours=3), "v"], 450.0)
+        self.assertTrue(
+            frame.loc[start + pd.Timedelta(hours=1):start + pd.Timedelta(hours=6), "N"].isna().all()
+        )
+        self.assertEqual(frame.loc[start + pd.Timedelta(hours=7), "N"], 5.0)
+        self.assertTrue(
+            np.isnan(frame.loc[start + pd.Timedelta(hours=3), "x_hee_au"])
+        )
+        self.assertTrue(np.isfinite(frame.loc[start + pd.Timedelta(hours=7), "x_hee_au"]))
 
     def test_hgs_lookup_uses_source_longitude_not_hee_position(self):
         start = pd.Timestamp("2018-11-13 00:00")

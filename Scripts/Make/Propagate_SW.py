@@ -28,6 +28,7 @@ from Library.SW.Config import (
 )
 from Library.SW.Coords import compute_rotation_state
 from Library.SW.Inputs import (
+    DEFAULT_CDAWEB_ARCHIVE_ROOT,
     build_ace_earth_swx_frame,
     build_model_input_series,
     load_enlil_prediction_frames,
@@ -45,6 +46,12 @@ def main(argv=None):
     parser.add_argument("--archive-root", type=Path, default=ROOT_DIR / "Outputs" / "SW" / "Archive")
     parser.add_argument("--input-source", choices=("parquet", "sql"), default="sql")
     parser.add_argument("--input-parquet", type=Path, default=data_path("CH Area.parquet"))
+    parser.add_argument(
+        "--validation-archive-root",
+        type=Path,
+        default=DEFAULT_CDAWEB_ARCHIVE_ROOT,
+        help="CDAWeb archive root; validation reads only its merged/ products",
+    )
     parser.add_argument("--source-guard-days", type=float, default=40.0)
     parser.add_argument("--mode", choices=("hindcast", "forecast"), default="hindcast")
     parser.add_argument("--enlil", action="store_true")
@@ -52,7 +59,7 @@ def main(argv=None):
     parser.add_argument(
         "--satellites",
         default=','.join(DEFAULT_ENABLED_SATELLITES),
-        help="Comma-separated configured satellite IDs to include in series.parquet",
+        help="Comma-separated satellite IDs, or 'all', for validation and series.parquet",
     )
     args = parser.parse_args(argv)
     enabled_satellites = parse_satellite_ids(args.satellites)
@@ -63,6 +70,11 @@ def main(argv=None):
     )
     if args.cr is None:
         assert args.start is not None and args.end is not None
+        validation_root = resolve_repo_path(args.validation_archive_root)
+        merged_validation_sources = {
+            sat: f"CDAWeb merged {get_satellite_config(sat).label}"
+            for sat in ("ace", "stereo_a", "stereo_b", "psp", "solo")
+        }
         for cr in iter_crs(args.start, args.end):
             directory = args.archive_root / f"CR{cr:04d}"
             if directory.exists():
@@ -81,6 +93,22 @@ def main(argv=None):
                     f"Existing archive lacks enabled satellites {sorted(missing_satellites)}: "
                     f"{directory}. Use a new archive root to rebuild it."
                 )
+                manifest_sources = manifest.get("validation_sources", {})
+                manifest_inputs = manifest.get("validation_inputs", {})
+                for sat in set(enabled_satellites).intersection(merged_validation_sources):
+                    expected_source = merged_validation_sources[sat]
+                    input_record = manifest_inputs.get(sat, {})
+                    product_path = Path(input_record.get("path") or "")
+                    assert (
+                        manifest_sources.get(sat) == expected_source
+                        and product_path.is_file()
+                        and product_path.parent.name == "merged"
+                        and product_path.parent.parent.resolve() == validation_root.resolve()
+                        and input_record.get("sha256")
+                    ), (
+                        f"Existing archive {directory} was not validated from the current "
+                        f"merged CDAWeb {sat} product. Use a new archive root to rebuild it."
+                    )
                 ace_satellites = {"ace", "ace_earth"}.intersection(enabled_satellites)
                 if ace_satellites:
                     for ace_sat in ace_satellites:
@@ -103,6 +131,7 @@ def main(argv=None):
                 "--archive-root", str(args.archive_root),
                 "--input-source", args.input_source,
                 "--input-parquet", str(args.input_parquet),
+                "--validation-archive-root", str(args.validation_archive_root),
                 "--source-guard-days", str(args.source_guard_days),
                 "--mode", args.mode,
             ]
@@ -155,6 +184,7 @@ def main(argv=None):
         satellite_ids=enabled_satellites,
         time_axis=grid.time_axis,
         time_freq=frequency,
+        validation_archive_root=args.validation_archive_root,
     )
     swx = build_ace_earth_swx_frame(prepared["sdo_input_df"])
     enlil = (
@@ -224,6 +254,19 @@ def main(argv=None):
         ),
         "output_step_minutes": step,
         "satellites": enabled_satellites,
+        "validation_archive_root": str(resolve_repo_path(args.validation_archive_root)),
+        "validation_sources": {
+            sat: frame.attrs.get("source") for sat, frame in satellite_frames.items()
+        },
+        "validation_inputs": {
+            sat: {
+                "path": frame.attrs.get("archive_path"),
+                "sha256": frame.attrs.get("archive_sha256"),
+                "source": frame.attrs.get("source"),
+                "position_source": frame.attrs.get("position_source"),
+            }
+            for sat, frame in satellite_frames.items()
+        },
         "slow_sw_patch_enabled": bool({"ace", "ace_earth"}.intersection(enabled_satellites)),
         "satellite_coord_frame": {
             sat: get_satellite_config(sat).coord_frame

@@ -79,6 +79,48 @@ PAPER_COMPARISONS_BY_SAT = {
             "regimes": REGIME_ORDER,
         },
     ],
+    "stereo_b": [
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
+    ],
+    "psp": [
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
+    ],
+    "solo": [
+        {
+            "comparison": "raw_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_predict_raw",
+            "regimes": REGIME_ORDER,
+        },
+        {
+            "comparison": "recurrent_vs_observed",
+            "reference": "v_real",
+            "candidate": "v_1cr_ago",
+            "regimes": REGIME_ORDER,
+        },
+    ],
 }
 
 
@@ -172,6 +214,9 @@ def restore_observed_and_recurrent_series(
                 "b_r_rtn",
                 "b_t_rtn",
                 "b_n_rtn",
+                "v_x_gse",
+                "v_y_gse",
+                "v_z_gse",
                 "x_hee_au",
                 "y_hee_au",
                 "z_hee_au",
@@ -241,6 +286,13 @@ def load_sat_icme_windows(sat_name):
         return load_icme_windows()
     if sat_name == "stereo_a":
         return load_icmecat_windows("STEREO-A")
+    if sat_name in {"stereo_b", "psp", "solo"}:
+        return pd.DataFrame(
+            {
+                "start": pd.Series(dtype="datetime64[ns]"),
+                "end": pd.Series(dtype="datetime64[ns]"),
+            }
+        )
     raise ValueError(f"No ICME catalogue configured for satellite: {sat_name}")
 
 
