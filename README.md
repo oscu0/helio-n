@@ -75,7 +75,7 @@ python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> 
 ```bash
 python Scripts/Make.py propagate_sw 2203 --input-source parquet \
   --input-parquet "Outputs/Filaments/from-miracle/CH Areas 20180101-20181231 idl-exact.parquet" \
-  --validation-archive-root "../Shock-and-Awe/Data/CDAWeb Archive" \
+  --validation-archive-root "Data/CDAWeb Validation" \
   --archive-root Outputs/SW/Samples/Archive
 python Scripts/Make.py make_animation "2018-04-22 00:00" "2018-04-22 06:00" \
   --archive-root Outputs/SW/Samples/Archive
@@ -83,7 +83,7 @@ python Scripts/Make.py make_animation "2018-04-22 00:00" "2018-04-22 06:00" \
 python Scripts/Make.py propagate_sw --start 2018-04-12 --end 2018-05-23 \
   --input-source parquet \
   --input-parquet "Outputs/Filaments/from-miracle/CH Areas 20180101-20181231 idl-exact.parquet" \
-  --validation-archive-root "../Shock-and-Awe/Data/CDAWeb Archive" \
+  --validation-archive-root "Data/CDAWeb Validation" \
   --archive-root Outputs/SW/Samples/Archive
 python Scripts/Make.py make_animation 2203 \
   --archive-root Outputs/SW/Samples/Archive
@@ -103,12 +103,12 @@ to `make_animation` renders its core with ±7 days of padding by default
 (requiring adjacent CR archives); two timestamps render an arbitrary range.
 Each frame labels its owning CR. The movie command never runs propagation.
 ACE, STEREO-A, STEREO-B, PSP, and Solar Orbiter validation observations come
-from their post-merge CDAWeb products under `CDAWeb Archive/merged/`;
+from their post-merge CDAWeb products under `Data/CDAWeb Validation/merged/`;
 intermediate `chunks/` are ignored. Select all five with
 `--satellites all`. Each per-CR manifest records the merged product path and
 checksum, and sequential reuse verifies that provenance for every selected
-spacecraft. The default archive root points to the sibling Shock-and-Awe
-checkout and can be overridden with `--validation-archive-root`.
+spacecraft. This is the default validation archive root and can be overridden
+with `--validation-archive-root`.
 `make_animation --satellites ace_earth,stereo_a` selects plotted spacecraft
 in that order; `--satellites none` produces a polar-only movie. By default it
 plots every spacecraft present in the archive. Selection removes both the

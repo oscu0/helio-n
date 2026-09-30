@@ -50,9 +50,7 @@ DEFAULT_ACE_AT_EARTH_PARQUET_PATH = data_path("ACE At Earth 1h.parquet")
 # https://izw1.caltech.edu/ACE/ASC/DATA/pos_att/ACE_GSE_position.txt
 DEFAULT_ACE_EPHEMERIS_PATH = data_path("ACE GSE position.txt")
 DEFAULT_STEREO_A_PARQUET_PATH = data_path("STEREO-A PLASTIC.parquet")
-DEFAULT_CDAWEB_ARCHIVE_ROOT = (
-    PROJECT_ROOT.parent / "Shock-and-Awe" / "Data" / "CDAWeb Archive"
-)
+DEFAULT_CDAWEB_ARCHIVE_ROOT = data_path("CDAWeb Validation")
 # 5,087 native forecast_dt/forecast_sw_speed points from
 # sdo.sdo_sw_forecast_0193p over [2018-01-01, 2019-01-01), without interpolation.
 DEFAULT_SWX_PARQUET_PATH = data_path("SWX Forecast 2018.parquet")
