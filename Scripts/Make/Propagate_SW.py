@@ -18,6 +18,7 @@ sys.path.append(str(ROOT_DIR))
 from Library.Paths import data_path, resolve_repo_path
 from Library.SW.Archive import cr_bounds, iter_crs, write_cr
 from Library.SW.Ballistic import cube_stats, propagate_ballistic
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Config import (
     DEFAULT_ENABLED_SATELLITES,
     get_satellite_config,
@@ -29,6 +30,9 @@ from Library.SW.Config import (
 from Library.SW.Coords import compute_rotation_state
 from Library.SW.Inputs import (
     DEFAULT_CDAWEB_ARCHIVE_ROOT,
+    SDO_OBSERVATION_AGE_METHOD,
+    SDO_OBSERVATION_AGE_VISIBLE_LIMB_DEG,
+    add_sdo_observation_geometry,
     build_ace_earth_swx_frame,
     build_model_input_series,
     load_enlil_prediction_frames,
@@ -91,6 +95,20 @@ def main(argv=None):
                 missing_satellites = set(enabled_satellites) - archived_satellites
                 assert not missing_satellites, (
                     f"Existing archive lacks enabled satellites {sorted(missing_satellites)}: "
+                    f"{directory}. Use a new archive root to rebuild it."
+                )
+                required_geometry = {
+                    ("satellite", sat, column)
+                    for sat in enabled_satellites
+                    for column in ("hee_beta_deg", "sdo_observation_age_days")
+                }
+                missing_geometry = required_geometry.difference(archived_series.columns)
+                assert (
+                    not missing_geometry
+                    and manifest.get("sdo_observation_age_method")
+                    == SDO_OBSERVATION_AGE_METHOD
+                ), (
+                    f"Existing archive lacks current SDO-age/ecliptic-latitude data: "
                     f"{directory}. Use a new archive root to rebuild it."
                 )
                 manifest_sources = manifest.get("validation_sources", {})
@@ -210,6 +228,7 @@ def main(argv=None):
             slow_sw_speed=slow_patch_empirical.slow_sw_speed(grid.time_axis),
             draw_slow_sw=True,
         )
+        comparisons[sat] = add_sdo_observation_geometry(comparisons[sat])
 
     core = (grid.time_axis >= cr_start) & (grid.time_axis < cr_end)
     assert core.any(), "No output time centres lie in the requested CR"
@@ -252,6 +271,10 @@ def main(argv=None):
             "native knots; continuous segments across gaps up to "
             f"{ballistic['maximum_input_gap_hours']} hours; no extrapolation"
         ),
+        "sdo_observation_age_method": SDO_OBSERVATION_AGE_METHOD,
+        "sdo_observation_age_rotation_days": CARRINGTON_ROTATION_DAYS,
+        "sdo_observation_age_visible_limb_deg": SDO_OBSERVATION_AGE_VISIBLE_LIMB_DEG,
+        "hee_beta_definition": "atan2(z_hee_au, hypot(x_hee_au, y_hee_au)) in degrees",
         "output_step_minutes": step,
         "satellites": enabled_satellites,
         "validation_archive_root": str(resolve_repo_path(args.validation_archive_root)),

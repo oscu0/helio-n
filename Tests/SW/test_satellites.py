@@ -11,7 +11,10 @@ from Library.SW.Config import (
     SATELLITE_CONFIGS,
     parse_satellite_ids,
 )
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Inputs import (
+    _hee_cartesian_from_hgs,
+    add_sdo_observation_geometry,
     find_cdaweb_merged_product,
     load_ace_earth_frame,
     load_ace_frame,
@@ -303,6 +306,41 @@ class SatelliteConfigTests(unittest.TestCase):
             np.isnan(frame.loc[start + pd.Timedelta(hours=3), "x_hee_au"])
         )
         self.assertTrue(np.isfinite(frame.loc[start + pd.Timedelta(hours=7), "x_hee_au"]))
+
+    def test_sdo_age_and_beta_use_their_separate_geometries(self):
+        index = pd.date_range("2020-01-01", periods=3, freq="1h")
+        longitudes = np.array([0.0, 120.0, -120.0])
+        age_positions = _hee_cartesian_from_hgs(
+            index,
+            longitudes,
+            np.zeros(len(index)),
+            np.ones(len(index)),
+        )
+        age_result = add_sdo_observation_geometry(age_positions)
+        beta_positions = pd.DataFrame(
+            {
+                "x_hee_au": [1.0, 1.0, 1.0],
+                "y_hee_au": [0.0, 0.0, 0.0],
+                "z_hee_au": [0.0, np.tan(np.deg2rad(12.0)), np.tan(np.deg2rad(-11.0))],
+            },
+            index=index,
+        )
+        beta_result = add_sdo_observation_geometry(beta_positions)
+        self.assertAlmostEqual(beta_result["hee_beta_deg"].iloc[0], 0.0, places=6)
+        self.assertAlmostEqual(beta_result["hee_beta_deg"].iloc[1], 12.0, places=6)
+        self.assertAlmostEqual(beta_result["hee_beta_deg"].iloc[2], -11.0, places=6)
+        self.assertEqual(age_result["sdo_observation_age_days"].iloc[0], 0.0)
+        rotation_days = CARRINGTON_ROTATION_DAYS
+        self.assertAlmostEqual(
+            age_result["sdo_observation_age_days"].iloc[1],
+            30.0 / (360.0 / rotation_days),
+            places=3,
+        )
+        self.assertAlmostEqual(
+            age_result["sdo_observation_age_days"].iloc[2],
+            150.0 / (360.0 / rotation_days),
+            places=3,
+        )
 
     def test_hgs_lookup_uses_source_longitude_not_hee_position(self):
         start = pd.Timestamp("2018-11-13 00:00")

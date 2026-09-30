@@ -14,8 +14,11 @@ from sunpy.coordinates.frames import (
 
 import userpwd
 from Library.Paths import PROJECT_ROOT, data_path, resolve_repo_path
-from Library.SW.Constants import SW_MODEL_V2_HANDOFF
-from Library.SW.Constants import SOLAR_RADIUS_KM
+from Library.SW.Constants import (
+    CARRINGTON_ROTATION_DAYS,
+    SOLAR_RADIUS_KM,
+    SW_MODEL_V2_HANDOFF,
+)
 from Library.SW.Config import get_satellite_config
 
 DEFAULT_SQL_QUERY = """
@@ -69,6 +72,11 @@ CDAWEB_MISSION_BY_SATELLITE = {
 }
 EARTH_RADII_PER_SOLAR_RADIUS = 109.0763707060096
 SATELLITE_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
+SDO_OBSERVATION_AGE_METHOD = (
+    "elapsed Carrington synodic rotation time since the satellite-facing "
+    "heliographic longitude last left SDO's visible disk; zero while visible"
+)
+SDO_OBSERVATION_AGE_VISIBLE_LIMB_DEG = 90.0
 SATELLITE_FRAME_COLUMNS = [
     "x_hee_au",
     "y_hee_au",
@@ -337,6 +345,46 @@ def _hee_cartesian_from_gse(index, x_km, y_km, z_km):
         index=observation_times,
         columns=["x_hee_au", "y_hee_au", "z_hee_au"],
     )
+
+
+def add_sdo_observation_geometry(frame):
+    """Add ecliptic latitude and age since SDO last saw the facing longitude.
+
+    Longitude visibility uses the rigid synodic Carrington rotation period and
+    a 90-degree solar-disk limb. The age is zero while the longitude is on the
+    Earth-facing disk, then advances until that longitude returns to view.
+    """
+    coordinate_columns = ["x_hee_au", "y_hee_au", "z_hee_au"]
+    assert set(coordinate_columns).issubset(frame.columns), (
+        "SDO observation geometry requires HEE x/y/z positions"
+    )
+    positions = frame[coordinate_columns].apply(pd.to_numeric, errors="coerce")
+    radius_xy = np.hypot(positions["x_hee_au"], positions["y_hee_au"])
+    radius = np.sqrt(radius_xy ** 2 + positions["z_hee_au"] ** 2)
+    beta = np.degrees(np.arctan2(positions["z_hee_au"], radius_xy))
+    beta = beta.where(radius > 0.0)
+
+    times = pd.DatetimeIndex(frame.index)
+    hee = SkyCoord(
+        x=positions["x_hee_au"].to_numpy(dtype=float) * u.AU,
+        y=positions["y_hee_au"].to_numpy(dtype=float) * u.AU,
+        z=positions["z_hee_au"].to_numpy(dtype=float) * u.AU,
+        frame=HeliocentricEarthEcliptic(obstime=times),
+        representation_type="cartesian",
+    )
+    hgs = hee.transform_to(HeliographicStonyhurst(obstime=times))
+    relative_longitude = (np.asarray(hgs.spherical.lon.to_value(u.deg)) + 180.0) % 360.0 - 180.0
+    rotation_rate_deg_per_day = 360.0 / float(CARRINGTON_ROTATION_DAYS)
+    age_angle = (relative_longitude - 90.0) % 360.0
+    visible = np.abs(relative_longitude) <= SDO_OBSERVATION_AGE_VISIBLE_LIMB_DEG
+    age_days = age_angle / rotation_rate_deg_per_day
+    age_days[visible] = 0.0
+    age_days[~(np.isfinite(relative_longitude) & (radius.to_numpy(dtype=float) > 0.0))] = np.nan
+
+    result = frame.copy()
+    result["hee_beta_deg"] = beta
+    result["sdo_observation_age_days"] = age_days
+    return result
 
 
 def _load_ace_hee_ephemeris(path):
