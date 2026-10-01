@@ -41,8 +41,8 @@ SATELLITE_CONFIGS = {
     ),
     "stereo_b": SatelliteConfig("stereo_b", "STEREO-B", "cdaweb_coho"),
 }
-DEFAULT_ENABLED_SATELLITES = ("ace", "stereo_a")
 ALL_VALIDATION_SATELLITES = ("ace", "stereo_a", "stereo_b", "psp", "solo")
+DEFAULT_ENABLED_SATELLITES = ALL_VALIDATION_SATELLITES
 
 
 def get_satellite_config(sat_id):

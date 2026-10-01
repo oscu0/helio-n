@@ -40,7 +40,10 @@ class SatelliteConfigTests(unittest.TestCase):
             {"ace", "ace_earth", "earth", "psp", "solo", "stereo_a", "stereo_b"},
         )
         self.assertEqual(parse_satellite_ids(None), list(DEFAULT_ENABLED_SATELLITES))
-        self.assertEqual(list(DEFAULT_ENABLED_SATELLITES), ["ace", "stereo_a"])
+        self.assertEqual(
+            list(DEFAULT_ENABLED_SATELLITES),
+            ["ace", "stereo_a", "stereo_b", "psp", "solo"],
+        )
         self.assertEqual(parse_satellite_ids("all"), list(ALL_VALIDATION_SATELLITES))
         self.assertEqual(parse_satellite_ids("stereo_a,ace_earth"), ["stereo_a", "ace_earth"])
         self.assertEqual(SATELLITE_CONFIGS["ace"].label, "ACE")
