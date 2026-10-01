@@ -466,6 +466,32 @@ def write_satellite_data_workbook(satellite_frames, output_path):
     return output_path
 
 
+def write_per_cr_stats_workbook(stats_frame, output_path):
+    """Write the long-form CR/satellite statistics with one sheet per satellite."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    assert not stats_frame.empty, "Cannot write an empty per-CR statistics workbook"
+    assert {"cr", "sat"}.issubset(stats_frame.columns)
+
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        for sat_name in stats_frame["sat"].drop_duplicates():
+            sheet_name = str(sat_name).replace("/", "-")[:31]
+            frame = stats_frame.loc[stats_frame["sat"] == sat_name]
+            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.book[sheet_name]
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+            for cell in worksheet[1]:
+                cell.font = Font(bold=True)
+            for column, name in enumerate(frame.columns, start=1):
+                values = frame[name].astype(str)
+                content_width = int(values.str.len().max()) if not values.empty else 0
+                worksheet.column_dimensions[get_column_letter(column)].width = min(
+                    38, max(12, len(str(name)) + 2, content_width + 2)
+                )
+    return output_path
+
+
 def build_hourly_csv_frame(
     reproduction_frame,
     comparison_frames,

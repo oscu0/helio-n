@@ -9,7 +9,16 @@ os.environ.setdefault("SUNPY_CONFIGDIR", "/tmp/helio_n_sunpy")
 import numpy as np
 import pandas as pd
 
-from Library.SW.Archive import cr_bounds, iter_crs, load_cr, load_cube, load_inputs, load_series, write_cr
+from Library.SW.Archive import (
+    cr_bounds,
+    iter_crs,
+    load_cr,
+    load_cube,
+    load_inputs,
+    load_series,
+    resolve_cr_or_date_range,
+    write_cr,
+)
 from Library.SW.Coords import build_centered_time_axis
 from Library.SW.Visualization import _format_title, build_satellite_comparison_frame, select_satellite_frames
 
@@ -25,6 +34,20 @@ class ArchiveTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_shared_run_range_accepts_cr_or_half_open_utc_dates(self):
+        cr, start, end = resolve_cr_or_date_range(str(self.cr))
+        self.assertEqual(cr, self.cr)
+        self.assertEqual((start, end), cr_bounds(self.cr))
+
+        cr, start, end = resolve_cr_or_date_range(
+            "2020-01-01T00:00:00+03:00", "2020-01-02T00:00:00+03:00"
+        )
+        self.assertIsNone(cr)
+        self.assertEqual(start, pd.Timestamp("2019-12-31 21:00"))
+        self.assertEqual(end, pd.Timestamp("2020-01-01 21:00"))
+        with self.assertRaisesRegex(AssertionError, "both start and end"):
+            resolve_cr_or_date_range("not-a-cr")
 
     def write_sample(self, cr, value):
         start, end = cr_bounds(cr)

@@ -13,6 +13,7 @@ from Library.SW.Report import (
     build_hourly_report_frame,
     build_satellite_data_frames,
     write_csv,
+    write_per_cr_stats_workbook,
     write_satellite_data_workbook,
 )
 
@@ -177,6 +178,23 @@ class CsvReportTests(unittest.TestCase):
         self.assertEqual(stereo_sheet.cell(3, 1).fill.fgColor.rgb[-6:], "F4CCCC")
         self.assertEqual(ace_sheet.cell(3, age_col).fill.fgColor.rgb[-6:], "FFFF00")
         self.assertEqual(stereo_sheet.cell(3, beta_col).fill.fgColor.rgb[-6:], "F4CCCC")
+
+    def test_per_cr_stats_workbook_has_one_sheet_per_satellite(self):
+        stats = pd.DataFrame(
+            [
+                {"cr": 2203, "cr_start": "2020-01-01", "cr_end": "2020-01-28", "sat": "ACE", "comparison": "raw_vs_observed", "regime": "all_sw", "n_samples": 100, "rmse": 50.0},
+                {"cr": 2204, "cr_start": "2020-01-28", "cr_end": "2020-02-24", "sat": "ACE", "comparison": "raw_vs_observed", "regime": "all_sw", "n_samples": 101, "rmse": 51.0},
+                {"cr": 2203, "cr_start": "2020-01-01", "cr_end": "2020-01-28", "sat": "STEREO-A", "comparison": "raw_vs_observed", "regime": "all_sw", "n_samples": 90, "rmse": 60.0},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_per_cr_stats_workbook(stats, Path(directory) / "per_cr.xlsx")
+            workbook = load_workbook(path, data_only=True)
+        self.assertEqual(workbook.sheetnames, ["ACE", "STEREO-A"])
+        ace = workbook["ACE"]
+        self.assertEqual(ace.cell(2, 1).value, 2203)
+        self.assertEqual(ace.cell(3, 1).value, 2204)
+        self.assertEqual(ace.cell(3, 8).value, 51.0)
 
 
 if __name__ == "__main__":

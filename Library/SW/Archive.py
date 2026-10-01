@@ -36,6 +36,23 @@ def cr_bounds(cr, output_step_minutes=60):
     return start.round(step), end.round(step)
 
 
+def resolve_cr_or_date_range(start_or_cr, end=None, output_step_minutes=60):
+    """Resolve a CR number or an explicit half-open UTC date range."""
+    if end is None:
+        value = str(start_or_cr).strip()
+        assert value.isdecimal(), (
+            "Supply a Carrington rotation number, or both start and end timestamps"
+        )
+        cr = int(value)
+        start, end = cr_bounds(cr, output_step_minutes)
+        return cr, start, end
+
+    start = _utc_naive(start_or_cr)
+    end = _utc_naive(end)
+    assert start < end, f"Expected start before end, got [{start}, {end})"
+    return None, start, end
+
+
 def iter_crs(start, end, output_step_minutes=60):
     """Yield rotations intersecting a half-open, rounded-core interval."""
     start = _utc_naive(start)
