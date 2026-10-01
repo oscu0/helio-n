@@ -58,6 +58,11 @@ def main(argv=None):
     )
     parser.add_argument("--source-guard-days", type=float, default=40.0)
     parser.add_argument("--mode", choices=("hindcast", "forecast"), default="hindcast")
+    parser.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help="Recompute every requested CR and replace existing CR archives",
+    )
     parser.add_argument("--enlil", action="store_true")
     parser.add_argument("--enlil-parquet", type=Path)
     parser.add_argument(
@@ -81,7 +86,7 @@ def main(argv=None):
         }
         for cr in iter_crs(args.start, args.end):
             directory = args.archive_root / f"CR{cr:04d}"
-            if directory.exists():
+            if directory.exists() and not args.no_reuse:
                 manifest = json.loads((directory / "manifest.json").read_text())
                 assert manifest["cr"] == cr
                 for filename in (
@@ -89,61 +94,70 @@ def main(argv=None):
                 ):
                     assert (directory / filename).exists(), f"Incomplete archive: {directory}"
                 archived_series = pd.read_parquet(directory / "series.parquet")
-                archived_satellites = set(
+                archived_satellites = list(dict.fromkeys(
                     archived_series["satellite"].columns.get_level_values(0)
+                ))
+                manifest_satellites = set(manifest.get("satellites") or ())
+                archived_satellite_set = set(archived_satellites)
+                requested_satellites = set(enabled_satellites)
+                archive_matches_series = manifest_satellites == archived_satellite_set
+                archive_covers_request = requested_satellites.issubset(
+                    archived_satellite_set
                 )
-                missing_satellites = set(enabled_satellites) - archived_satellites
-                assert not missing_satellites, (
-                    f"Existing archive lacks enabled satellites {sorted(missing_satellites)}: "
-                    f"{directory}. Use a new archive root to rebuild it."
-                )
-                required_geometry = {
-                    ("satellite", sat, column)
-                    for sat in enabled_satellites
-                    for column in ("hee_beta_deg", "sdo_observation_age_days")
-                }
-                missing_geometry = required_geometry.difference(archived_series.columns)
-                assert (
-                    not missing_geometry
-                    and manifest.get("sdo_observation_age_method")
-                    == SDO_OBSERVATION_AGE_METHOD
-                ), (
-                    f"Existing archive lacks current SDO-age/ecliptic-latitude data: "
-                    f"{directory}. Use a new archive root to rebuild it."
-                )
-                manifest_sources = manifest.get("validation_sources", {})
-                manifest_inputs = manifest.get("validation_inputs", {})
-                for sat in set(enabled_satellites).intersection(merged_validation_sources):
-                    expected_source = merged_validation_sources[sat]
-                    input_record = manifest_inputs.get(sat, {})
-                    product_path = Path(input_record.get("path") or "")
+                if archive_matches_series and archive_covers_request:
+                    required_geometry = {
+                        ("satellite", sat, column)
+                        for sat in enabled_satellites
+                        for column in ("hee_beta_deg", "sdo_observation_age_days")
+                    }
+                    missing_geometry = required_geometry.difference(archived_series.columns)
                     assert (
-                        manifest_sources.get(sat) == expected_source
-                        and product_path.is_file()
-                        and product_path.parent.name == "merged"
-                        and product_path.parent.parent.resolve() == validation_root.resolve()
-                        and input_record.get("sha256")
+                        not missing_geometry
+                        and manifest.get("sdo_observation_age_method")
+                        == SDO_OBSERVATION_AGE_METHOD
                     ), (
-                        f"Existing archive {directory} was not validated from the current "
-                        f"merged CDAWeb {sat} product. Use a new archive root to rebuild it."
+                        f"Existing archive lacks current SDO-age/ecliptic-latitude data: "
+                        f"{directory}. Use --no-reuse to rebuild it."
                     )
-                ace_satellites = {"ace", "ace_earth"}.intersection(enabled_satellites)
-                if ace_satellites:
-                    for ace_sat in ace_satellites:
-                        required_ace_columns = {
-                            ("satellite", ace_sat, "v_predict_raw"),
-                            ("satellite", ace_sat, "v_predict"),
-                            ("satellite", ace_sat, "slow_sw_patch_mask"),
-                        }
-                        missing_ace_columns = required_ace_columns.difference(
-                            archived_series.columns
+                    manifest_sources = manifest.get("validation_sources", {})
+                    manifest_inputs = manifest.get("validation_inputs", {})
+                    for sat in set(enabled_satellites).intersection(merged_validation_sources):
+                        expected_source = merged_validation_sources[sat]
+                        input_record = manifest_inputs.get(sat, {})
+                        product_path = Path(input_record.get("path") or "")
+                        assert (
+                            manifest_sources.get(sat) == expected_source
+                            and product_path.is_file()
+                            and product_path.parent.name == "merged"
+                            and product_path.parent.parent.resolve() == validation_root.resolve()
+                            and input_record.get("sha256")
+                        ), (
+                            f"Existing archive {directory} was not validated from the current "
+                            f"merged CDAWeb {sat} product. Use a new archive root or "
+                            "--no-reuse to rebuild it."
                         )
-                        assert not missing_ace_columns, (
-                            f"Existing archive lacks always-on ACE slow-wind series: "
-                            f"{directory}. Use a new archive root to rebuild it."
-                        )
-                print(f"Reusing {directory}")
-                continue
+                    ace_satellites = {"ace", "ace_earth"}.intersection(enabled_satellites)
+                    if ace_satellites:
+                        for ace_sat in ace_satellites:
+                            required_ace_columns = {
+                                ("satellite", ace_sat, "v_predict_raw"),
+                                ("satellite", ace_sat, "v_predict"),
+                                ("satellite", ace_sat, "slow_sw_patch_mask"),
+                            }
+                            missing_ace_columns = required_ace_columns.difference(
+                                archived_series.columns
+                            )
+                            assert not missing_ace_columns, (
+                                f"Existing archive lacks always-on ACE slow-wind series: "
+                                f"{directory}. Use --no-reuse to rebuild it."
+                            )
+                    print(f"Reusing {directory}")
+                    continue
+                print(
+                    f"Rebuilding {directory}: archived satellites "
+                    f"{sorted(archived_satellite_set)}, requested "
+                    f"{sorted(requested_satellites)}"
+                )
             command = [
                 sys.executable, str(Path(__file__).resolve()), str(cr),
                 "--archive-root", str(args.archive_root),
@@ -158,6 +172,8 @@ def main(argv=None):
             if args.enlil_parquet is not None:
                 command.extend(("--enlil-parquet", str(args.enlil_parquet)))
             command.extend(("--satellites", ",".join(enabled_satellites)))
+            if args.no_reuse or directory.exists():
+                command.append("--no-reuse")
             subprocess.run(command, check=True)
         return 0
 
@@ -310,6 +326,7 @@ def main(argv=None):
         prepared_inputs=prepared["sdo_input_df"],
         series=series,
         metadata=metadata,
+        overwrite=args.no_reuse,
     )
     print(
         f"Saved {directory} | {int(core.sum())} frames | "

@@ -1,6 +1,7 @@
 """Rounded-Carrington-rotation solar-wind archive I/O."""
 
 import json
+import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -93,12 +94,13 @@ def write_cr(
     prepared_inputs,
     series,
     metadata,
+    overwrite=False,
 ):
-    """Publish one complete, nonoverlapping CR; never overwrite an archive."""
+    """Publish one complete CR, replacing an existing archive only on request."""
     archive_root = Path(archive_root)
     archive_root.mkdir(parents=True, exist_ok=True)
     target = _cr_dir(archive_root, cr)
-    assert not target.exists(), f"Archive already exists: {target}"
+    assert overwrite or not target.exists(), f"Archive already exists: {target}"
     cr_start, cr_end = cr_bounds(cr, metadata["output_step_minutes"])
     astronomical_start, astronomical_end = _astronomical_cr_bounds(cr)
     times = pd.DatetimeIndex(time_axis)
@@ -148,6 +150,8 @@ def write_cr(
         prepared_inputs.to_parquet(staging / "prepared_inputs.parquet", index=False)
         series.to_parquet(staging / "series.parquet")
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        if target.exists():
+            shutil.rmtree(target)
         staging.rename(target)
 
     index_path = archive_root / "index.parquet"
@@ -157,7 +161,7 @@ def write_cr(
         "finite_fraction": manifest["finite_fraction"],
     }])
     index = pd.read_parquet(index_path) if index_path.exists() else row.iloc[0:0]
-    assert int(cr) not in set(index["cr"])
+    index = index.loc[index["cr"] != int(cr)]
     index = pd.concat([index, row], ignore_index=True).sort_values("cr")
     index.to_parquet(index_path)
     return target

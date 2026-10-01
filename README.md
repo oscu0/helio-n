@@ -110,9 +110,12 @@ ACE, STEREO-A, STEREO-B, PSP, and Solar Orbiter validation observations come
 from their post-merge CDAWeb products under `Data/CDAWeb Validation/merged/`;
 intermediate `chunks/` are ignored. Propagation defaults to all five
 validation spacecraft; `--satellites all` can make that selection explicit.
-Each per-CR manifest records the merged product path and checksum, and
-sequential reuse verifies that provenance for every selected spacecraft. This
-is the default validation archive root and can be overridden with
+Each per-CR manifest records the merged product path and checksum. Sequential
+reuse accepts an existing archive whose satellite set is a superset of the
+request and verifies provenance for every requested spacecraft. If requested
+satellites are missing, those CRs are recomputed in place; `--no-reuse`
+recomputes every requested CR and replaces existing archives. This is the
+default validation archive root and can be overridden with
 `--validation-archive-root`.
 `make_animation --satellites ace_earth,stereo_a` selects plotted spacecraft
 in that order; `--satellites none` produces a polar-only movie. By default it
@@ -150,9 +153,8 @@ the fixed Earth-point coordinate series. They always store both
 and `v_predict` (the same forecast with a time-varying empirical slow-wind patch),
 plus `slow_sw_patch_mask`. The patch is applied to the ACE comparison series;
 it does not modify the propagated speed cube. STEREO-A keeps the unpatched
-series. Existing archives without the patch mask or all five default
-validation spacecraft cannot be reused by a new sequential propagation run.
-Use a new archive root to rebuild them.
+series. Existing archives without the patch mask require `--no-reuse` to be
+rebuilt; archives missing requested satellites are recomputed automatically.
 The hourly satellite workbook uses the requested range reconstructed from the
 per-CR archive and retains empty instrument fields rather than filling them
 with model values; magnetic components retain the source instrument frame.
