@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/helio_n_matplotlib")
 sys.path.append(str(ROOT_DIR))
 
-from Library.SW.Archive import cr_bounds, load_cube, load_series
+from Library.SW.Archive import load_cube, load_series, resolve_cr_or_date_range
 from Library.SW.Config import (
     DEFAULT_ENABLED_SATELLITES,
     get_satellite_config,
@@ -21,14 +21,20 @@ from Library.SW.Config import (
     load_sw_runtime_spec,
     parse_satellite_ids,
 )
+from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Visualization import export_polar_animation
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("start_or_cr", help="CR number or inclusive UTC start timestamp")
-    parser.add_argument("end", nargs="?", help="Exclusive UTC timestamp")
-    parser.add_argument("--pad-days", type=float, help="Pad each end (default: 7 days in CR mode)")
+    parser.add_argument(
+        "start_or_cr", help="CR number, or inclusive UTC start timestamp when end is given"
+    )
+    parser.add_argument("end", nargs="?", help="Exclusive UTC end timestamp for a date range")
+    parser.add_argument(
+        "--pad-days", type=float,
+        help="Pad each animation end (default: 3 days for a CR, 0 for a date range)",
+    )
     parser.add_argument("--archive-root", type=Path, default=ROOT_DIR / "Outputs" / "SW" / "Archive")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--fps", type=int, default=30)
@@ -39,21 +45,24 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     assert args.fps > 0
-    if args.end is None:
-        cr = int(args.start_or_cr)
-        start, end = cr_bounds(cr)
-        pad_days = 7.0 if args.pad_days is None else args.pad_days
-    else:
-        cr = None
-        start, end = pd.Timestamp(args.start_or_cr), pd.Timestamp(args.end)
-        pad_days = 0.0 if args.pad_days is None else args.pad_days
+    cr, start, end = resolve_cr_or_date_range(args.start_or_cr, args.end)
+    pad_days = (
+        (3.0 if cr is not None else 0.0)
+        if args.pad_days is None else args.pad_days
+    )
     assert start < end and pad_days >= 0
     pad = pd.Timedelta(days=pad_days)
     start -= pad
     end += pad
 
     cube = load_cube(args.archive_root, start, end)
-    series = load_series(args.archive_root, start, end)
+    panel_history_days = float(CARRINGTON_ROTATION_DAYS - 7.0)
+    panel_future_days = 7.0
+    series = load_series(
+        args.archive_root,
+        start - pd.Timedelta(days=panel_history_days),
+        end + pd.Timedelta(days=panel_future_days),
+    )
     times = pd.DatetimeIndex(cube.time.values)
     speed = cube["speed"].values
     finite = speed[np.isfinite(speed)]

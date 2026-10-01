@@ -98,10 +98,14 @@ hour; the original bounds remain in each manifest. Adjacent products therefore
 concatenate on one hourly lattice. `Library.SW.Archive.load_cube` and
 `load_series` ingest arbitrary UTC ranges, including CR boundaries;
 `load_cube(..., context_frames=1)` includes the preceding final snapshot when
-an analysis starts at the next CR's first hourly centre. A single CR number
-to `make_animation` renders its core with ±7 days of padding by default
-(requiring adjacent CR archives); two timestamps render an arbitrary range.
-Each frame labels its owning CR. The movie command never runs propagation.
+an analysis starts at the next CR's first hourly centre. Both
+`make_animation` and `sw_stats` accept either a single CR number or an
+explicit start/end date range. In CR mode, animation frames span three days
+before the CR through three days after it; the time-series panels also preload
+their full look-back/look-ahead window so the opening frame is populated when
+the neighboring archive exists. Date-range mode uses the requested interval
+exactly. Every animation frame labels its current CR. The movie command never
+runs propagation.
 ACE, STEREO-A, STEREO-B, PSP, and Solar Orbiter validation observations come
 from their post-merge CDAWeb products under `Data/CDAWeb Validation/merged/`;
 intermediate `chunks/` are ignored. Select all five with
@@ -122,10 +126,11 @@ time since the satellite-facing solar longitude last left SDO's visible disk
 speed panel mark ages over 10 days in yellow and `abs(hee_beta_deg) > 10`
 degrees in pink; compact badges mark flags at the current frame. Polar
 satellite markers keep a black fill with a white outline for contrast.
-`Scripts/Make/SW_Report.py` writes a third, minimally formatted
-`SW Satellite Data <range>.xlsx` workbook with one sheet per satellite in the
-reproduction archive; its rows use the same yellow and pink thresholds. The
-existing paper report and CSV outputs are unchanged.
+`Scripts/Make/SW_Stats.py` reconstitutes an arbitrary interval from per-CR
+archives and writes exactly two workbooks: `SW Satellite Data <range>.xlsx`
+with one hourly sheet per satellite plus Russian variable definitions, and
+`SW Per-CR Stats <range>.xlsx` with one per-satellite sheet of CR-level
+forecast scores. `SW_Report.py` remains an alias to this worker.
 `SW 4.ipynb` runs a CR 2306 SQL sample through the library functions directly,
 with separate cells for inspecting source inputs, prepared inputs, and the
 in-memory cube. Its sample archive and animation omit satellite comparisons.
@@ -147,14 +152,9 @@ series. Older ACE archives without the patch mask cannot be reused by a new
 sequential propagation run; archives containing only the legacy `ace_earth`
 series also cannot satisfy the new default `ace` selection. Use a new archive
 root to rebuild them.
-`Scripts/Make/SW_Report.py` writes the existing XLSX report and an hourly CSV
-(`SW Export YYYYMMDD_HHMM-YYYYMMDD_HHMM.csv`). The CSV contains the CH-area and
-forecast fields for ACE and STEREO-A, native speed/density/temperature/magnetic
-fields when present, and STEREO-A HEE coordinates plus its spherical position
-relative to ACE. ACE exports contain both the patched forecast and the raw
-300 km/s-baseline forecast. Missing instrument fields remain empty rather than
-being filled with model values; magnetic components retain the source
-instrument frame.
+The hourly satellite workbook uses the requested range reconstructed from the
+per-CR archive and retains empty instrument fields rather than filling them
+with model values; magnetic components retain the source instrument frame.
 `propagate_ballistic()` returns the speed cube; `cube_stats()` leaves it
 unchanged and computes the slow-wind mask, limits, and counts. The present mask
 is inferred by output-time speed equality, so a future time-varying slow-wind
