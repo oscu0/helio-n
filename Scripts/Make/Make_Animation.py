@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/helio_n_matplotlib")
 sys.path.append(str(ROOT_DIR))
 
-from Library.SW.Archive import load_cube, load_series, resolve_cr_or_date_range
+from Library.SW.Archive import cr_bounds, load_cube, load_series, resolve_cr_or_date_range
 from Library.SW.Config import (
     DEFAULT_ENABLED_SATELLITES,
     get_satellite_config,
@@ -23,6 +23,16 @@ from Library.SW.Config import (
 )
 from Library.SW.Constants import CARRINGTON_ROTATION_DAYS
 from Library.SW.Visualization import export_polar_animation
+
+
+def _archive_time_bounds(archive_root):
+    rotations = sorted(
+        int(path.name[2:])
+        for path in Path(archive_root).glob("CR[0-9][0-9][0-9][0-9]")
+        if path.is_dir()
+    )
+    assert rotations, f"No CR archives found in {archive_root}"
+    return cr_bounds(rotations[0])[0], cr_bounds(rotations[-1])[1]
 
 
 def main(argv=None):
@@ -55,13 +65,27 @@ def main(argv=None):
     start -= pad
     end += pad
 
+    archive_start, archive_end = _archive_time_bounds(args.archive_root)
+    start = max(start, archive_start)
+    end = min(end, archive_end)
+    assert start < end, (
+        f"Requested animation range does not overlap archived coverage "
+        f"[{archive_start}, {archive_end})"
+    )
+
     cube = load_cube(args.archive_root, start, end)
     panel_history_days = float(CARRINGTON_ROTATION_DAYS - 7.0)
     panel_future_days = 7.0
+    series_start = max(
+        start - pd.Timedelta(days=panel_history_days), archive_start
+    )
+    series_end = min(
+        end + pd.Timedelta(days=panel_future_days), archive_end
+    )
     series = load_series(
         args.archive_root,
-        start - pd.Timedelta(days=panel_history_days),
-        end + pd.Timedelta(days=panel_future_days),
+        series_start,
+        series_end,
     )
     times = pd.DatetimeIndex(cube.time.values)
     speed = cube["speed"].values
