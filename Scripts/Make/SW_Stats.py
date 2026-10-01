@@ -31,7 +31,7 @@ from Library.SW.Stats import (
 
 
 def stamp_for_range(start_dt, end_dt):
-    return f"{start_dt:%Y%m%d_%H%M}-{end_dt:%Y%m%d_%H%M}"
+    return f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}"
 
 
 def _available_satellites(series):
@@ -142,10 +142,10 @@ def main(argv=None):
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = stamp_for_range(start_dt, end_dt)
     satellite_data_path = args.satellite_data_out or (
-        args.output_dir / f"SW Satellite Data {stamp}.xlsx"
+        args.output_dir / f"SW {stamp}.xlsx"
     )
     per_cr_stats_path = args.per_cr_stats_out or (
-        args.output_dir / f"SW Per-CR Stats {stamp}.xlsx"
+        args.output_dir / f"SW {stamp} (Per-CR).xlsx"
     )
     write_satellite_data_workbook(satellite_frames, satellite_data_path)
     write_per_cr_stats_workbook(per_cr_stats, per_cr_stats_path)

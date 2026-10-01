@@ -78,9 +78,8 @@ def main(argv=None):
     selected_satellites = parse_satellite_ids(args.satellites)
     if args.satellites is None and not set(selected_satellites).issubset(comparison_frames):
         selected_satellites = list(comparison_frames)
-    stamp = f"{start:%Y%m%d_%H%M}-{end:%Y%m%d_%H%M}"
-    label = f"CR{cr} " if cr is not None else ""
-    output = args.output or Path(args.archive_root) / f"SW Animation {label}{stamp}.mp4"
+    stamp = f"{start:%Y%m%d}-{end:%Y%m%d}"
+    output = args.output or Path(args.archive_root) / f"SW {stamp}.mp4"
     runtime = load_sw_runtime_spec()
     result = export_polar_animation(
         anim_outfile=output,
