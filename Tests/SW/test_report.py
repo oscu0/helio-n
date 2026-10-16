@@ -15,6 +15,7 @@ from Library.SW.Report import (
     write_csv,
     write_per_cr_stats_workbook,
     write_satellite_data_workbook,
+    write_summary_stats_workbook,
 )
 
 
@@ -195,6 +196,28 @@ class CsvReportTests(unittest.TestCase):
         self.assertEqual(ace.cell(2, 1).value, 2203)
         self.assertEqual(ace.cell(3, 1).value, 2204)
         self.assertEqual(ace.cell(3, 8).value, 51.0)
+
+    def test_summary_workbook_has_global_and_yearly_satellite_sheets(self):
+        global_stats = pd.DataFrame([
+            {"sat": "ACE", "n_samples": 3, "r": 0.5, "rmse": 50., "mae": 40.},
+            {"sat": "PSP", "n_samples": 0, "r": np.nan, "rmse": np.nan, "mae": np.nan},
+        ])
+        yearly = pd.concat([
+            global_stats.assign(year=2025), global_stats.assign(year=2026),
+        ], ignore_index=True)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_summary_stats_workbook(
+                global_stats, yearly, Path(directory) / "summary.xlsx"
+            )
+            workbook = load_workbook(path, data_only=True)
+        self.assertEqual(workbook.sheetnames, ["Global", "ACE (Yearly)", "PSP (Yearly)"])
+        self.assertEqual(workbook["Global"].cell(2, 3).value, 0.5)
+        self.assertEqual(workbook["ACE (Yearly)"].cell(3, 6).value, 2026)
+        self.assertEqual(workbook["PSP (Yearly)"].cell(2, 2).value, 0)
+        self.assertIsNone(workbook["PSP (Yearly)"].cell(2, 3).value)
+        for sheet in workbook:
+            self.assertEqual(sheet.freeze_panes, "A2")
+            self.assertEqual(sheet.auto_filter.ref, sheet.dimensions)
 
 
 if __name__ == "__main__":
