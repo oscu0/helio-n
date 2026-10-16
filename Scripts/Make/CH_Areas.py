@@ -22,9 +22,7 @@ from sunpy.map.maputils import all_coordinates_from_map, coordinate_is_on_solar_
 
 from Library.CH import project
 from Library.Config import apply_config, paths
-from Library.IO import pmap_path, prepare_pmap
 from Library.Metrics import generate_omask
-from Library.Processing import get_postprocessing_params, pmap_to_mask
 from Library.IO import prepare_mask
 from Models.CH_SW_Correspondence.Shugay import load as load_ch_sw_model
 
@@ -225,7 +223,7 @@ def validate_against_db(out_df, start, end):
     return bool(within_tolerance.all())
 
 
-def worker_compute(rows, specs, smoothing_params, area_mode):
+def worker_compute(rows, area_mode):
     results = []
 
     for row in rows:
@@ -261,17 +259,6 @@ def worker_compute(rows, specs, smoothing_params, area_mode):
             return ch_area / sun
 
         record["s_idl"] = rel_area_from_mask(idl_mask)
-
-        for arch, date_id in specs:
-            spec = f"{arch}{date_id}"
-            row_ns = SimpleNamespace(fits_path=row[1], mask_path=row[2])
-            pmap_file = pmap_path(row_ns, arch, date_id)
-            if not Path(pmap_file).exists():
-                record[f"s_{spec.lower()}"] = float("nan")
-                continue
-            pmap = prepare_pmap(pmap_file)
-            model_mask = pmap_to_mask(pmap, smoothing_params)
-            record[f"s_{spec.lower()}"] = rel_area_from_mask(model_mask)
 
         results.append(record)
 
@@ -323,9 +310,6 @@ def main(argv):
         print("No rows in requested date range.")
         return 1
 
-    specs = [("A1", "D1"), ("A2", "D1"), ("A2", "D2")]
-    smoothing_params = get_postprocessing_params("P0")
-
     rows = list(df[["fits_path", "mask_path"]].itertuples(index=True, name=None))
     max_workers = max(1, int(apply_config.get("plot_threads", 1)))
     chunk_size = int(apply_config.get("apply_batch_size", 16))
@@ -335,8 +319,6 @@ def main(argv):
     ctx = mp.get_context("spawn")
     worker_fn = partial(
         worker_compute,
-        specs=specs,
-        smoothing_params=smoothing_params,
         area_mode=args.area_mode,
     )
     with ctx.Pool(processes=min(max_workers, len(chunks))) as pool:

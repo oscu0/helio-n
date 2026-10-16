@@ -56,19 +56,6 @@ def prepare_fits(path, mask_disk=True, clip_low=1, clip_high=99):
     return map_obj, map_data
 
 
-def resize_for_model(img2d: np.ndarray, target_size: int) -> np.ndarray:
-    """
-    Resize a 2-D float image to the model input size using PIL bilinear in float mode.
-    Keeps values in float32; no normalization changes beyond interpolation.
-    """
-    if img2d.shape == (target_size, target_size):
-        return img2d.astype(np.float32, copy=False)
-
-    pil_img = PIL.Image.fromarray(img2d.astype(np.float32), mode="F")
-    pil_img = pil_img.resize((target_size, target_size), resample=PIL.Image.BILINEAR)
-    return np.array(pil_img, dtype=np.float32)
-
-
 def prepare_hmi_jpg(jpg_path, target_size=1024):
     """
     Load 512px HMI JPEG (grayscale), upscale to target_size.
@@ -111,11 +98,6 @@ def prepare_hmi_jpg(
     arr = (arr - 128.0) / 128.0  # now in approx [-1, +1]
 
     return arr
-
-
-def prepare_pmap(path):
-    # very complex and useful function
-    return np.load(path)
 
 
 def prepare_dataset(
@@ -278,10 +260,7 @@ def prepare_dataset(
     masks_only = merged[~has_fits & has_mask].copy()
     no_hmi = merged[has_fits & has_mask & ~has_hmi].copy()
 
-    # Prepare "matches" DataFrame similar to previous API: use all_three primarily,
-    # but include rows where pmap may be empty if pmaps_root not provided.
-    # We'll create a canonical matches DF that contains any row that has at least fits and mask,
-    # and include pmap_path if present (empty string otherwise).
+    # Keep observations with both an image and an existing final mask.
     matches = merged[has_fits & has_mask].copy()
 
     # Evil pandas moment
@@ -326,46 +305,6 @@ def prepare_dataset(
         "masks_only": masks_only,
         "no_hmi": no_hmi,
     }
-
-
-def pmap_path(row, architecture_id, date_range_id):
-    base = base_output_stem(row.mask_path)
-    return f"{base}CH_MASK_{architecture_id}{date_range_id}PX.npy"
-
-
-def plot_path(
-    base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str
-) -> str:
-    """Build CH plot path from base stem (no CH_MASK suffix or extension)."""
-    return f"{base_stem}CH_{architecture_id}{date_range_id}{postprocessing}.png"
-
-
-def unet_mask_path(
-    base_stem: str, architecture_id: str, date_range_id: str, postprocessing: str
-) -> str:
-    """Build UNet CH mask path from base stem (no CH_MASK suffix or extension)."""
-    return f"{base_stem}CH_MASK_{architecture_id}{date_range_id}{postprocessing}.png"
-
-
-def base_output_stem(mask_path: str) -> str:
-    """
-    Given a mask path (endswith CH_MASK.png or CH_MASK_FINAL.png), return the stem to which
-    architecture/date/postprocessing suffixes can be appended. Ensures no double extensions/suffixes.
-    Example: /.../AIA20160801_010005_0193_CH_MASK_FINAL.png -> /.../AIA20160801_010005_0193_
-    """
-    base = mask_path
-    if base.endswith(".png"):
-        base = base[: -len(".png")]
-
-    # Trim trailing CH_MASK and any appended suffix (e.g., CH_MASK_FINAL, CH_MASK_A1D1P1)
-    if "CH_MASK" in base:
-        base = base[: base.rfind("CH_MASK")]
-
-    # Expect _FINAL in the original filename; leave a trailing underscore as before
-    if not mask_path.endswith("_FINAL.png"):
-        raise ValueError(f"Mask filename missing _FINAL: {mask_path}")
-
-    return base
 
 
 def synoptic_dataset(df):
