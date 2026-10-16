@@ -490,21 +490,65 @@ def _build_satellite_plot_items(comparison_frames):
             )
             if column in frame.columns
         ]
-        sat_items.append(
-            {
-                "sat_name": sat_name,
-                "frame": frame,
-                "panel_frame": build_export_plot_frame(frame, plot_columns),
-                "label": frame.attrs.get("label", sat_name),
-                "predict_col": PREDICT_COLUMN if PREDICT_COLUMN in frame.columns else None,
-                "real_col": REAL_COLUMN if REAL_COLUMN in frame.columns else None,
-                "swx_col": None,
-                "microforecast_col": None,
-                "noaa_col": NOAA_COLUMN if NOAA_COLUMN in frame.columns else None,
-                "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
-            }
-        )
+        sat_item = {
+            "sat_name": sat_name,
+            "frame": frame,
+            "panel_frame": build_export_plot_frame(frame, plot_columns),
+            "label": frame.attrs.get("label", sat_name),
+            "predict_col": PREDICT_COLUMN if PREDICT_COLUMN in frame.columns else None,
+            "real_col": REAL_COLUMN if REAL_COLUMN in frame.columns else None,
+            "swx_col": None,
+            "microforecast_col": None,
+            "noaa_col": NOAA_COLUMN if NOAA_COLUMN in frame.columns else None,
+            "marker": SAT_MARKER_SHAPES[sat_idx % len(SAT_MARKER_SHAPES)],
+        }
+        _cache_satellite_plot_arrays(sat_item)
+        sat_items.append(sat_item)
     return sat_items
+
+
+def _cache_satellite_plot_arrays(sat_item):
+    """Prepare sorted time indexes and numeric columns once per satellite."""
+    if "_frame_time_ns" in sat_item:
+        return
+
+    frame = sat_item["frame"]
+    frame_index = pd.DatetimeIndex(frame.index)
+    sat_item["_frame_time_ns"] = frame_index.asi8
+    for name, column in (
+        ("_frame_phi", "phi_target"),
+        ("_frame_radius", "r_target"),
+        ("_frame_sdo_age", "sdo_observation_age_days"),
+        ("_frame_beta", "hee_beta_deg"),
+    ):
+        if column in frame.columns:
+            sat_item[name] = pd.to_numeric(frame[column], errors="coerce").to_numpy(
+                dtype=float, na_value=np.nan
+            )
+        else:
+            sat_item[name] = np.full(len(frame), np.nan, dtype=float)
+
+    if {"phi_target", "v_predict"}.issubset(frame.columns):
+        age_frame = frame[["phi_target", "v_predict"]].dropna().sort_index()
+        age_frame = age_frame[~age_frame.index.duplicated(keep="last")]
+        sat_item["_age_time_ns"] = pd.DatetimeIndex(age_frame.index).asi8
+        sat_item["_age_phi"] = age_frame["phi_target"].to_numpy(dtype=float)
+        sat_item["_age_speed"] = age_frame["v_predict"].to_numpy(dtype=float)
+    else:
+        sat_item["_age_time_ns"] = np.array([], dtype=np.int64)
+        sat_item["_age_phi"] = np.array([], dtype=float)
+        sat_item["_age_speed"] = np.array([], dtype=float)
+
+    panel_frame = sat_item["panel_frame"]
+    panel_index = pd.DatetimeIndex(panel_frame.index)
+    sat_item["_panel_index"] = panel_index
+    sat_item["_panel_time_ns"] = panel_index.asi8
+    sat_item["_panel_values"] = {
+        column: pd.to_numeric(panel_frame[column], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan
+        )
+        for column in panel_frame.columns
+    }
 
 
 def select_satellite_frames(comparison_frames, satellites=None):
@@ -595,16 +639,20 @@ def _resolve_panel_ylim(sat_items):
 
 def _update_satellite_markers(sat_items, current_time, r_axis):
     current_time = pd.Timestamp(current_time)
+    current_time_ns = current_time.value
     r_max = float(np.nanmax(r_axis))
     r_min = float(np.nanmin(r_axis))
     for sat_item in sat_items:
-        sat_frame = sat_item["frame"]
-        if current_time not in sat_frame.index:
+        _cache_satellite_plot_arrays(sat_item)
+        time_ns = sat_item["_frame_time_ns"]
+        position = int(np.searchsorted(time_ns, current_time_ns))
+        if position == len(time_ns) or time_ns[position] != current_time_ns:
             sat_item["polar_marker"].set_data([], [])
             continue
-        row = sat_frame.loc[current_time]
-        phi_value = float(row["phi_target"])
-        r_value = float(np.clip(float(row["r_target"]), r_min, r_max - 0.75))
+        phi_value = float(sat_item["_frame_phi"][position])
+        r_value = float(
+            np.clip(sat_item["_frame_radius"][position], r_min, r_max - 0.75)
+        )
         sat_item["polar_marker"].set_data([np.deg2rad(phi_value)], [r_value])
         sat_item["polar_marker"].set_markerfacecolor("black")
         sat_item["polar_marker"].set_markeredgecolor("white")
@@ -612,9 +660,31 @@ def _update_satellite_markers(sat_items, current_time, r_axis):
 
 def _update_panel_titles(sat_items, current_time, window_before_days, window_after_days):
     current_time = pd.Timestamp(current_time)
+    current_time_ns = current_time.value
     for sat_item in sat_items:
-        sat_frame = sat_item["frame"]
-        phi_value, speed_value = _resolve_age_inputs(sat_frame, current_time)
+        _cache_satellite_plot_arrays(sat_item)
+        age_time_ns = sat_item["_age_time_ns"]
+        nearest_pos = int(np.searchsorted(age_time_ns, current_time_ns))
+        if len(age_time_ns) == 0:
+            phi_value, speed_value = np.nan, np.nan
+        else:
+            if nearest_pos == 0:
+                nearest_pos = 0
+            elif nearest_pos == len(age_time_ns):
+                nearest_pos -= 1
+            elif (
+                current_time_ns - age_time_ns[nearest_pos - 1]
+                < age_time_ns[nearest_pos] - current_time_ns
+            ):
+                nearest_pos -= 1
+            if (
+                abs(age_time_ns[nearest_pos] - current_time_ns)
+                > AGE_SAMPLE_TOLERANCE.value
+            ):
+                phi_value, speed_value = np.nan, np.nan
+            else:
+                phi_value = float(sat_item["_age_phi"][nearest_pos])
+                speed_value = float(sat_item["_age_speed"][nearest_pos])
         age_days = _compute_ch_age_days(
             phi_deg=phi_value,
             speed_km_s=speed_value,
@@ -628,12 +698,13 @@ def _update_panel_titles(sat_items, current_time, window_before_days, window_aft
             fontsize=10,
             loc="left",
         )
-        row = sat_frame.loc[current_time] if current_time in sat_frame.index else None
-        age_days = (
-            float(row.get("sdo_observation_age_days", np.nan))
-            if row is not None else np.nan
-        )
-        beta_deg = float(row.get("hee_beta_deg", np.nan)) if row is not None else np.nan
+        frame_time_ns = sat_item["_frame_time_ns"]
+        frame_pos = int(np.searchsorted(frame_time_ns, current_time_ns))
+        if frame_pos < len(frame_time_ns) and frame_time_ns[frame_pos] == current_time_ns:
+            age_days = float(sat_item["_frame_sdo_age"][frame_pos])
+            beta_deg = float(sat_item["_frame_beta"][frame_pos])
+        else:
+            age_days = beta_deg = np.nan
         sat_item["age_flag_badge"].set_visible(
             np.isfinite(age_days) and age_days > SDO_AGE_FLAG_DAYS
         )
@@ -647,44 +718,45 @@ def _update_panel_windows(sat_items, current_time, window_before_days, window_af
     window_start = current_time - pd.Timedelta(days=float(window_before_days))
     window_end = current_time + pd.Timedelta(days=float(window_after_days))
     for sat_item in sat_items:
-        compare_window = sat_item["panel_frame"].loc[window_start:window_end]
+        _cache_satellite_plot_arrays(sat_item)
+        panel_time_ns = sat_item["_panel_time_ns"]
+        start = int(np.searchsorted(panel_time_ns, window_start.value, side="left"))
+        end = int(np.searchsorted(panel_time_ns, window_end.value, side="right"))
+        panel_index = sat_item["_panel_index"][start:end]
+        panel_values = sat_item["_panel_values"]
         if sat_item["predict_line"] is not None:
             sat_item["predict_line"].set_data(
-                compare_window.index,
-                compare_window[sat_item["predict_col"]].values,
+                panel_index,
+                panel_values[sat_item["predict_col"]][start:end],
             )
         if sat_item["real_line"] is not None:
-            _real = compare_window[sat_item["real_col"]].dropna()
-            sat_item["real_line"].set_data(_real.index, _real.values)
+            values = panel_values[sat_item["real_col"]][start:end]
+            keep = ~pd.isna(values)
+            sat_item["real_line"].set_data(panel_index[keep], values[keep])
         if sat_item["swx_line"] is not None:
-            _swx = compare_window[sat_item["swx_col"]].dropna()
-            sat_item["swx_line"].set_data(_swx.index, _swx.values)
+            values = panel_values[sat_item["swx_col"]][start:end]
+            keep = ~pd.isna(values)
+            sat_item["swx_line"].set_data(panel_index[keep], values[keep])
         if sat_item["microforecast_line"] is not None:
-            _microforecast = compare_window[sat_item["microforecast_col"]].dropna()
-            sat_item["microforecast_line"].set_data(
-                _microforecast.index,
-                _microforecast.values,
-            )
+            values = panel_values[sat_item["microforecast_col"]][start:end]
+            keep = ~pd.isna(values)
+            sat_item["microforecast_line"].set_data(panel_index[keep], values[keep])
         if sat_item["noaa_line"] is not None:
-            _noaa = compare_window[sat_item["noaa_col"]].dropna()
-            sat_item["noaa_line"].set_data(_noaa.index, _noaa.values)
+            values = panel_values[sat_item["noaa_col"]][start:end]
+            keep = ~pd.isna(values)
+            sat_item["noaa_line"].set_data(panel_index[keep], values[keep])
         sat_item["time_marker"].set_xdata([current_time, current_time])
         sat_item["axis"].set_xlim(window_start, window_end)
-        age_days = pd.to_numeric(
-            compare_window.get(
-                "sdo_observation_age_days",
-                pd.Series(np.nan, index=compare_window.index),
-            ),
-            errors="coerce",
-        )
-        beta_deg = pd.to_numeric(
-            compare_window.get(
-                "hee_beta_deg", pd.Series(np.nan, index=compare_window.index)
-            ),
-            errors="coerce",
-        )
-        age_times = compare_window.index[age_days.to_numpy() > SDO_AGE_FLAG_DAYS]
-        beta_times = compare_window.index[beta_deg.abs().to_numpy() > HEE_BETA_FLAG_DEG]
+        age_values = panel_values.get("sdo_observation_age_days")
+        if age_values is None:
+            age_values = np.full(len(panel_time_ns), np.nan, dtype=float)
+        beta_values = panel_values.get("hee_beta_deg")
+        if beta_values is None:
+            beta_values = np.full(len(panel_time_ns), np.nan, dtype=float)
+        age_window = age_values[start:end]
+        beta_window = beta_values[start:end]
+        age_times = panel_index[age_window > SDO_AGE_FLAG_DAYS]
+        beta_times = panel_index[np.abs(beta_window) > HEE_BETA_FLAG_DEG]
         sat_item["age_flag_line"].set_data(
             age_times, np.full(len(age_times), 0.035)
         )
