@@ -158,10 +158,17 @@ speed panel mark ages over 10 days in yellow and `abs(hee_beta_deg) > 10`
 degrees in pink; compact badges mark flags at the current frame. Polar
 satellite markers keep a black fill with a white outline for contrast.
 `Scripts/Make/SW_Stats.py` reconstitutes an arbitrary interval from per-CR
-archives and writes exactly two workbooks: `SW <range>.xlsx`
+archives and writes three workbooks: `SW <range>.xlsx`
 with one hourly sheet per satellite plus Russian variable definitions, and
 `SW <range> (Per-CR).xlsx` with one per-satellite sheet of CR-level forecast
-scores. Workbook names use date-only bounds, such as
+scores, plus `SW <range> (Summary).xlsx` with a `Global` sheet and one
+`<satellite> (Yearly)` sheet per satellite. Summary sheets contain valid-pair
+counts, Pearson R, RMSE, MAE and bias for the same comparisons and ICME regimes
+as the CR scores. They are computed directly from the hourly pairs, rather
+than averaging CR or yearly metrics. Calendar years are split at January 1
+UTC; `start_utc` and exclusive `end_utc` show the actual coverage, including
+partial first/last years. Errors and bias are in km/s. `--summary-stats-out`
+overrides the summary workbook path. Workbook names use date-only bounds, such as
 `SW 20250101-20260101.xlsx`; animation files use the same `SW <range>` pattern.
 `SW 4.ipynb` runs a CR 2306 SQL sample through the library functions directly,
 with separate cells for inspecting source inputs, prepared inputs, and the
