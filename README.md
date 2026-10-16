@@ -1,74 +1,101 @@
 # Helio-N \[/ˈhɛliən/\]
 https://www.youtube.com/watch?v=eGtwgYt_QnA&list=RDeGtwgYt_QnA
 
-This repo contains a small set of scripts to prepare data, train the U-Net, run inference, and shuttle artifacts between machines.
+Helio-N prepares solar-image datasets, experiments with filament suppression in
+existing IDL coronal-hole (CH) masks, and calculates and evaluates solar-wind
+forecasts. The active workflow on Miracle is:
+
+`Dataset → filament features/classification → filamentless masks → CH areas → SW archive/statistics`
+
+U-Net training, boundary inference, and segmentation comparisons are archived.
+See [Archived U-Net workflow](#archived-u-net-workflow) for the branch, removal
+commits, and recovery commands.
 
 ## Environment
-- Conda/YAML envs live in `Config/Environment Defs/`:
-  - CUDA: `icme3.12-cuda.yml`
-  - Apple Metal: `icme3.12-metal.yml`
-  - CPU: `icme3.12.yml`
-- Example: `conda env create -f "Config/Environment Defs/icme3.12-cuda.yml" && conda activate icme3.12`
-- PIP fallback: `pip install -r "Config/Environment Defs/requirements.txt"`
+
+Conda/YAML environments live in `Config/Environment Defs/`:
+
+- CUDA / Miracle: `icme3.12-cuda.yml` (`icme3.12-cuda`)
+- Apple Metal: `icme3.12-metal.yml` (`icme3.12-metal`)
+- CPU: `icme3.12.yml` (`icme3.12`)
+
+For example, create and activate the CUDA environment before running the Python
+commands below:
+
+```bash
+conda env create -f "Config/Environment Defs/icme3.12-cuda.yml"
+conda activate icme3.12-cuda
+```
+
+The PIP requirements are in `Config/Environment Defs/requirements.txt`.
+Environment definitions retain their historical deep-learning dependencies;
+the current filament baseline uses NumPy/SciPy and does not require TensorFlow
+or scikit-learn.
 
 ## Machine configuration
-- Per-host settings are in `Config/Machine.json`. The key **must** match `socket.gethostname()`. It's possible to override the host with $MACHINE
-- Required keys:
-  - `fits_root`, `masks_root`, `hmi_root`: where raw data lives
-  - `aia304_root` (optional): AIA 304 Å FITS root (set to `null` if unavailable)
-  - `artifact_root`: where parquet/plots/models are written (per host)
-  - `train_batch_size`, `apply_batch_size`, `chunk_size`, `max_inflight_plots`, `plot_threads`
-- Optional: `inherits` lets a host clone another entry and override only a few paths.
-- Global plot settings: `Config/Plot.json` (`target_px`, `dpi`).
-- Paths/parquet outputs live under `Outputs/Artifacts/<hostname>/`.
-- Models save to `Outputs/Models/<architecture><date_range>.keras`.
-- Segmentation model definitions and date ranges live in `Models/Segmentation/` (e.g., `Models/Segmentation/A1.py`).
-- CH-SW correspondence model modules live in `Models/CH_SW_Correspondence/` (currently `Shugay.py`).
+
+`Config/Machine.json` selects paths and runtime settings by hostname. Set
+`MACHINE=miracle` explicitly for Miracle; `inherits` lets another entry reuse
+settings while overriding paths.
+
+- `fits_root`, `masks_root`, `hmi_root`: AIA 193 FITS, existing final IDL masks,
+  and HMI data.
+- `aia304_root`: optional AIA 304 Å FITS root; set to `null` if unavailable.
+- `artifact_root`: host-specific dataset indexes and helper tables, normally
+  under `Outputs/Artifacts/<host>/`.
+- `filament_feature_workers`: filament-feature process count.
+- `plot_threads`: also supplies the CH-area worker count through `apply_config`.
+
+Historical fields remain part of the configuration contract, including
+`train_batch_size`, `train_workers`, `train_max_queue_size`,
+`train_use_multiprocessing`, `apply_batch_size`, `chunk_size`, and
+`max_inflight_plots`. `Library/Config.py` still reads them. Keep these fields,
+`Config/Plot.json` (`target_px`, `dpi`), and `Config/Postprocessing/` presets;
+archiving a workflow does not remove configuration fields or files.
+
+CH–SW correspondence models remain in `Models/CH_SW_Correspondence/`:
+`Shugay.py` and `Shugay_Slow_SW.py`.
 
 ## Data preparation
-Build the dataset parquet from raw FITS/masks/HMI roots.
+
+Build the dataset index from existing AIA FITS, final IDL masks, HMI, and
+optional AIA 304 data:
 
 ```bash
-python Scripts/Make.py Dataset [hourly]
+MACHINE=miracle python Scripts/Make.py Dataset
 ```
 
-- Uses roots from `Config/Machine.json`.
-- Default is `hourly=False` (keep all matches). Pass `hourly` to keep one sample per hour per day.
-- Writes `Outputs/Artifacts/<host>/Paths.parquet` plus helper CSVs for missing data.
-- Run `python Scripts/Make.py` to list available Make scripts.
+- Roots come from `Config/Machine.json`.
+- By default, keep all matches. The optional `hourly` argument keeps one
+  observation per hour. Pass `--start YYYYMMDD --end YYYYMMDD` together to
+  restrict the input dates, inclusively.
+- Writes `Outputs/Artifacts/<host>/Paths.parquet` plus missing-data CSVs.
+- Existing masks are inputs; this command does not determine CH boundaries.
+- Run `python Scripts/Make.py` to list available Make commands.
 
-## Training
+## CH areas and SW inputs
+
+Calculate a baseline from the original IDL masks before a suppression experiment:
+
 ```bash
-python Scripts/Train.py <architecture_id> <date_range_id>
+MACHINE=miracle python Scripts/Make.py CH_Areas 20180101 20181231 \
+  --area-mode idl-exact --validate-db \
+  --output-parquet "Outputs/Filaments/CH Areas Baseline 20180101-20181231 idl-exact.parquet"
 ```
 
-- Example: `python Scripts/Train.py A2 D1`
-- Loads `Models/Segmentation/<architecture_id>.py` and injects `train_batch_size` from `Machine.json` only if `batch_size` is not set in the model definition.
-- Date ranges are defined in `Models/Segmentation/<architecture_id>.py` and selected by `<date_range_id>`.
-- Uses generator-based training with optional `correct_steps_by_n`.
-- Saves model to `Outputs/Models/<architecture_id><date_range_id>.keras`.
+`--paths-parquet` selects an alternate dataset index, including one whose
+`mask_path` column points to filament-suppressed masks. Keep baseline and
+experimental area outputs separate with `--output-parquet`.
 
-## Applying (inference + plots)
-```bash
-python Scripts/Apply.py <architecture_id> <date_range_id> <postprocessing> <start> <end>
-```
+`idl-exact` writes `s_idl_exact_pct` in the database's percent units, exact FITS
+`source_dt`, and the compatible `dt`, `ch_relative_area`, and `forecast_sw_speed`
+columns. `--validate-db` compares original-mask speeds against the frozen
+pre-2019 database series at exact observation timestamps. Use it for the
+baseline, not as an equality gate on intentionally altered masks.
 
-- Example: `python Scripts/Apply.py A2 D1 P1 20170601 20170701`
-- `<postprocessing>` must match a file in `Config/Postprocessing/` (e.g., `P0`, `P1`, `Custom`).
-- `<start>`/`<end>` slice the Paths.parquet index (timestamp strings like `YYYYMMDD_HHMM`).
-- Uses `apply_config` from `Machine.json` (`apply_batch_size`, `chunk_size`, `plot_threads`, `max_inflight_plots`).
-- Outputs:
-  - `.npy` pmaps via `Library.IO.pmap_path` (co-located with masks)
-  - CH overlay PNGs and mask-only PNGs for requested and baseline `P0` postprocessing
-
-## Stats
-```bash
-python Scripts/Make.py Stats <architecture_id> <date_range_id> <postprocessing> [synoptic]
-```
-
-- Example: `python Scripts/Make.py Stats A1 D1 P1`
-- Add `synoptic` to read `Paths (Synoptic).parquet` instead of `Paths.parquet`.
-- Writes `Outputs/Artifacts/<host>/Stats/<architecture><date_range><postprocessing>_stats.parquet`.
+The default `projected` mode retains the older projected-area fraction `s_idl`.
+It is a different area definition and unit convention from `idl-exact`.
+Neither mode runs U-Net or writes U-Net comparison columns.
 
 ## Solar-wind CR archive
 
@@ -215,7 +242,8 @@ MACHINE=miracle python Scripts/Apply_Filament.py 20180101 20181231 \
   --features-parquet "Outputs/Filaments/Features 20180101-20181231.parquet"
 MACHINE=miracle python Scripts/Make/CH_Areas.py 20180101 20181231 \
   --area-mode idl-exact \
-  --paths-parquet "Outputs/Filaments/Paths Filamentless 20180101-20181231.parquet"
+  --paths-parquet "Outputs/Filaments/Paths Filamentless 20180101-20181231.parquet" \
+  --output-parquet "Outputs/Filaments/CH Areas Filamentless 20180101-20181231 idl-exact.parquet"
 ```
 
 Validation gates:
@@ -228,6 +256,21 @@ Validation gates:
 - Compare baseline and filamentless 2018 area parquets through the same frozen
   CH-SW and heliosphere pipeline; keep the frozen 2018 SWX result as a separate
   reference and do not fit any threshold or model on 2018.
+
+## Filament experiment notebooks
+
+`Analysis/Filament Removal.ipynb`, `Analysis/Filament Thresholding.ipynb`, and
+`Analysis/Orientation Self-Test.ipynb` now load existing masks. For ISWAT cases,
+configure the image and mask roots, then inspect the recorded same-day mask
+time offsets before interpreting comparisons. Missing masks fail explicitly;
+blank placeholders are not used as candidate boundaries.
+
+The threshold notebook writes to `Outputs/Filaments/ISWAT IDL Thresholding/`,
+separate from the historical boundary-detector cache. Old component IDs,
+features, and manual labels must not be reused for different boundaries.
+Saved notebook outputs were preserved as historical evidence; rerun the
+relevant groups before treating them as results of the current IDL workflow.
+`SW 2.ipynb` retains only the IDL comparison and exports `Paper Stats IDL.xlsx`.
 
 ## Synoptic copy helper
 Sync FITS/masks/HMI trees between the main and “mini” hosts.
@@ -243,8 +286,64 @@ python Scripts/Make.py Synoptic inplace  # build synoptic subset only
 - In `up` mode, builds a synoptic subset (00/06/12/18) before copying.
 - In `inplace` mode, only builds `Paths (Synoptic).parquet` from `Paths.parquet`.
 
+## Archived U-Net workflow
+
+The complete pre-removal source snapshot is on **`archive/unet-segmentation`**,
+at commit `cc5b073bfcd0775053b9960cf250761a775a7978`. The branch was created
+locally; if its name is unavailable in another clone, use that commit as the
+starting ref.
+
+The removal was split into two commits:
+
+- **Stage 1 — `961c88759df8df8b72662b0e92738503f223b9eb`:** removed complete
+  U-Net files, including `Library/Model.py`, `Library/Processing.py`,
+  `Library/Plot.py`, `Models/Segmentation/`, training/inference scripts, and
+  segmentation-specific notebooks and statistics.
+- **Stage 2 — `7c39ec3be26368ef070d774aed3e38afaba6fdb2`:** edited the retained
+  scripts and notebooks to remove U-Net portions. This is the commit to inspect
+  or reverse when restoring shared integration code: `Library/IO.py`,
+  `Library/CH.py`, `Library/Metrics.py`, `Models/__init__.py`,
+  `Scripts/Make/CH_Areas.py`, the three retained filament/orientation notebooks,
+  and `SW 2.ipynb`.
+
+To resume from the original source snapshot in a separate checkout:
+
+```bash
+git worktree add -b resume/unet-segmentation ../helio-n-unet archive/unet-segmentation
+git show archive/unet-segmentation:README.md
+```
+
+To restore the U-Net code onto a newer `main` instead, start a separate branch
+and reverse the shared-code edits before restoring the deleted files:
+
+```bash
+git switch -c restore/unet-on-main main
+git revert --no-commit 7c39ec3be26368ef070d774aed3e38afaba6fdb2
+git revert --no-commit 961c88759df8df8b72662b0e92738503f223b9eb
+git diff --cached
+```
+
+Review the staged restoration and resolve conflicts with later work before
+committing. The archive's README contains the original training and inference
+usage notes. Restoring only the deleted files is insufficient because stage 2
+also changed their shared APIs and consumers.
+
+Model checkpoints (`Outputs/Models/*.keras`), cached probability maps, and most
+`Outputs/` research artifacts are ignored by Git. They need a separate copy or
+backup; neither the archive branch nor a new worktree supplies those files.
+Configuration fields, presets, and environment definitions were retained on
+`main` throughout the removal.
+
 ## Notes
 - The filament baseline uses NumPy/SciPy and does not require TensorFlow or
   scikit-learn.
-- `Library/Config.py` auto-selects the host section from `Machine.json` and exposes `paths`, `apply_config`, and `train_batch_size` to scripts.
+- `Library/Config.py` selects the host section from `Machine.json` and exposes
+  the retained path and runtime settings.
+- `Scripts/Train_Filament_Per_Pixel.py` and
+  `Scripts/Make/ISWAT_Filament_Gallery.py` remain experimental. Both currently
+  import `CATALOG_MIN_ALIGNED_CENTERLINE_PX` and
+  `CATALOG_MIN_ALIGNED_CENTERLINE_FRACTION`, which are absent from
+  `Library/Filaments.py`. This pre-existing catalog-interface mismatch must be
+  reconciled before those two tools can run; the region trainer above does not
+  have this import error.
 - Run `python -m Scripts` to list available commands.
