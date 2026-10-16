@@ -466,6 +466,21 @@ def write_satellite_data_workbook(satellite_frames, output_path):
     return output_path
 
 
+def _write_stats_sheet(writer, frame, sheet_name):
+    frame.to_excel(writer, sheet_name=sheet_name, index=False)
+    worksheet = writer.book[sheet_name]
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+    for column, name in enumerate(frame.columns, start=1):
+        values = frame[name].astype(str)
+        content_width = int(values.str.len().max()) if not values.empty else 0
+        worksheet.column_dimensions[get_column_letter(column)].width = min(
+            38, max(12, len(str(name)) + 2, content_width + 2)
+        )
+
+
 def write_per_cr_stats_workbook(stats_frame, output_path):
     """Write the long-form CR/satellite statistics with one sheet per satellite."""
     output_path = Path(output_path)
@@ -477,18 +492,23 @@ def write_per_cr_stats_workbook(stats_frame, output_path):
         for sat_name in stats_frame["sat"].drop_duplicates():
             sheet_name = str(sat_name).replace("/", "-")[:31]
             frame = stats_frame.loc[stats_frame["sat"] == sat_name]
-            frame.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.book[sheet_name]
-            worksheet.freeze_panes = "A2"
-            worksheet.auto_filter.ref = worksheet.dimensions
-            for cell in worksheet[1]:
-                cell.font = Font(bold=True)
-            for column, name in enumerate(frame.columns, start=1):
-                values = frame[name].astype(str)
-                content_width = int(values.str.len().max()) if not values.empty else 0
-                worksheet.column_dimensions[get_column_letter(column)].width = min(
-                    38, max(12, len(str(name)) + 2, content_width + 2)
-                )
+            _write_stats_sheet(writer, frame, sheet_name)
+    return output_path
+
+
+def write_summary_stats_workbook(global_stats, yearly_stats, output_path):
+    """Write full-run scores and one calendar-year score sheet per satellite."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    assert not global_stats.empty, "Cannot write an empty global statistics sheet"
+    assert not yearly_stats.empty, "Cannot write empty yearly statistics sheets"
+
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        _write_stats_sheet(writer, global_stats, "Global")
+        for sat_name in yearly_stats["sat"].drop_duplicates():
+            sheet_name = f"{sat_name} (Yearly)".replace("/", "-")[:31]
+            frame = yearly_stats.loc[yearly_stats["sat"] == sat_name]
+            _write_stats_sheet(writer, frame, sheet_name)
     return output_path
 
 

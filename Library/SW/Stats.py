@@ -410,6 +410,11 @@ def build_sw_forecast_stats(
         end_dt=end_dt,
         freq=freq,
     )
+    return _build_stats_from_score_frames(score_frames, sat_labels)
+
+
+def _build_stats_from_score_frames(score_frames, sat_labels):
+    """Score prepared frames with the shared comparisons and ICME regimes."""
     rows = []
     for sat_name, eval_frame in score_frames.items():
         regime_masks = build_regime_masks(eval_frame)
@@ -454,6 +459,41 @@ def export_sw_forecast_stats_csv(csv_outfile, **stats_kwargs):
     stats = build_sw_forecast_stats(**stats_kwargs)
     stats.to_csv(output_path, index=False)
     return stats
+
+
+def build_sw_forecast_yearly_stats(
+    comparison_frames,
+    start_dt,
+    end_dt,
+    sat_labels,
+    freq=SCORE_FREQ,
+):
+    """Score calendar years from hourly pairs, clipping partial years to the run."""
+    start, end = pd.Timestamp(start_dt), pd.Timestamp(end_dt)
+    assert start < end, f"Expected start before end, got [{start}, {end})"
+    score_frames = build_score_frames(
+        comparison_frames=comparison_frames,
+        start_dt=start,
+        end_dt=end,
+        freq=freq,
+    )
+    frames = []
+    year_start = start
+    while year_start < end:
+        year_end = min(
+            pd.Timestamp(year=year_start.year + 1, month=1, day=1, tz=start.tz), end
+        )
+        year_frames = {
+            sat: frame.loc[(frame.index >= year_start) & (frame.index < year_end)]
+            for sat, frame in score_frames.items()
+        }
+        stats = _build_stats_from_score_frames(year_frames, sat_labels)
+        stats.insert(0, "end_utc", year_end)
+        stats.insert(0, "start_utc", year_start)
+        stats.insert(0, "year", year_start.year)
+        frames.append(stats)
+        year_start = year_end
+    return pd.concat(frames, ignore_index=True)
 
 
 def build_cr_windows(start_dt, end_dt):

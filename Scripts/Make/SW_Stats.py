@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconstitute archived solar-wind series and write the two analysis workbooks."""
+"""Reconstitute archived solar-wind series and write hourly, CR and summary workbooks."""
 
 import argparse
 import sys
@@ -22,9 +22,12 @@ from Library.SW.Report import (
     build_satellite_data_frames,
     write_per_cr_stats_workbook,
     write_satellite_data_workbook,
+    write_summary_stats_workbook,
 )
 from Library.SW.Stats import (
     build_sw_forecast_cr_stats_csv_frame,
+    build_sw_forecast_stats,
+    build_sw_forecast_yearly_stats,
     restore_observed_and_recurrent_series,
     restore_swx_series,
 )
@@ -89,6 +92,11 @@ def main(argv=None):
         type=Path,
         help="Optional path for the per-CR, per-satellite statistics workbook.",
     )
+    parser.add_argument(
+        "--summary-stats-out",
+        type=Path,
+        help="Optional path for the global and yearly per-satellite statistics workbook.",
+    )
     args = parser.parse_args(argv)
 
     _cr, start_dt, end_dt = resolve_cr_or_date_range(args.start_or_cr, args.end)
@@ -138,6 +146,20 @@ def main(argv=None):
         end_dt=end_dt,
         sat_labels=satellite_labels,
     )
+    global_stats = build_sw_forecast_stats(
+        comparison_frames=comparison_frames,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        sat_labels=satellite_labels,
+    )
+    global_stats.insert(0, "end_utc", end_dt)
+    global_stats.insert(0, "start_utc", start_dt)
+    yearly_stats = build_sw_forecast_yearly_stats(
+        comparison_frames=comparison_frames,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        sat_labels=satellite_labels,
+    )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = stamp_for_range(start_dt, end_dt)
@@ -147,10 +169,15 @@ def main(argv=None):
     per_cr_stats_path = args.per_cr_stats_out or (
         args.output_dir / f"SW {stamp} (Per-CR).xlsx"
     )
+    summary_stats_path = args.summary_stats_out or (
+        args.output_dir / f"SW {stamp} (Summary).xlsx"
+    )
     write_satellite_data_workbook(satellite_frames, satellite_data_path)
     write_per_cr_stats_workbook(per_cr_stats, per_cr_stats_path)
+    write_summary_stats_workbook(global_stats, yearly_stats, summary_stats_path)
     print(f"Saved {satellite_data_path} | {sum(map(len, satellite_frames.values()))} hourly rows")
     print(f"Saved {per_cr_stats_path} | {len(per_cr_stats)} per-CR statistic rows")
+    print(f"Saved {summary_stats_path} | {len(global_stats)} global and {len(yearly_stats)} yearly statistic rows")
     return 0
 
 
