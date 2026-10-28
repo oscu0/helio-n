@@ -512,6 +512,29 @@ def write_summary_stats_workbook(global_stats, yearly_stats, output_path):
     return output_path
 
 
+def write_event_stats_workbook(stats_tables, output_path):
+    """Write annual HSS counts and signed peak shortfalls, one reference per sheet."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        for sheet_name, frame in stats_tables.items():
+            _write_stats_sheet(writer, frame, sheet_name)
+            worksheet = writer.book[sheet_name]
+            worksheet.row_dimensions[1].height = 32
+            for cell in worksheet[1]:
+                cell.alignment = Alignment(wrap_text=True, vertical="center")
+            for column, name in enumerate(frame.columns, start=1):
+                if name.endswith("_rate"):
+                    number_format = "0.0%"
+                elif name == "mean_underreporting_km_s":
+                    number_format = "0.0"
+                else:
+                    number_format = "0"
+                for cells in worksheet.iter_rows(min_row=2, min_col=column, max_col=column):
+                    cells[0].number_format = number_format
+    return output_path
+
+
 def build_hourly_csv_frame(
     reproduction_frame,
     comparison_frames,

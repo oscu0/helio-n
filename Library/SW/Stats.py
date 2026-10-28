@@ -17,6 +17,14 @@ from Library.SW.Inputs import (
 )
 
 SCORE_FREQ = "1h"
+HSS_EVENT_REFERENCES = [
+    ("Yermolaev checked - Earth", "earth", "yermolaev_hss.csv"),
+    ("B1 - ACE", "ace", "ace_hss_b1.csv"),
+    ("B1 - STEREO-A", "stereo_a", "stereo-a_hss_b1.csv"),
+    ("B1 - STEREO-B", "stereo_b", "stereo-b_hss_b1.csv"),
+    ("B1 - PSP", "psp", "psp_hss_b1.csv"),
+    ("B1 - Solar Orbiter", "solo", "solo_hss_b1.csv"),
+]
 RECURRENT_MAX_SOURCE_GAP = pd.Timedelta(hours=6)
 REGIME_ORDER = ["all_sw", "no_icme"]
 COMPARISON_ORDER = [
@@ -717,3 +725,92 @@ def export_icme_event_csv(csv_outfile, **event_kwargs):
     events = build_icme_event_df(**event_kwargs)
     events.to_csv(output_path, index=False)
     return events
+
+
+def load_hss_event_catalogs(hss_list_dir, start_dt, end_dt):
+    """Select reference events by their original UTC start, ignoring ICME flags."""
+    catalogs = {}
+    for sheet_name, _satellite, filename in HSS_EVENT_REFERENCES:
+        events = pd.read_csv(
+            Path(hss_list_dir) / filename, usecols=["T_start", "T_end", "v_max"]
+        )
+        for column in ["T_start", "T_end"]:
+            events[column] = pd.to_datetime(events[column], utc=True).dt.tz_localize(None)
+        catalogs[sheet_name] = events.loc[
+            (events.T_start >= pd.Timestamp(start_dt))
+            & (events.T_start < pd.Timestamp(end_dt))
+        ].reset_index(drop=True)
+    return catalogs
+
+
+def score_hss_events(events, predicted_speed):
+    """Score padded observed intervals against raw hourly model speed."""
+    prediction = pd.Series(
+        pd.to_numeric(predicted_speed).to_numpy(dtype=float),
+        index=pd.to_datetime(predicted_speed.index, utc=True).tz_localize(None),
+    ).sort_index().resample(SCORE_FREQ).mean()
+    scored = events.copy()
+    scored["n_scored"] = False
+    scored["hit"] = False
+    scored["miss"] = False
+    scored["miss_no_ch"] = False
+    scored["v_pred_peak"] = np.nan
+    scored["t_pred_peak"] = pd.NaT
+    scored["underreporting_km_s"] = np.nan
+    padding = pd.Timedelta(hours=12)
+    for event in events.itertuples():
+        index = event.Index
+        hours = pd.date_range(
+            event.T_start - padding, event.T_end + padding, freq=SCORE_FREQ
+        )
+        window = prediction.reindex(hours)
+        if not np.isfinite(window.to_numpy()).all():
+            continue
+        peak = float(window.max())
+        scored.loc[index, "n_scored"] = True
+        scored.loc[index, "hit"] = peak > 400.0
+        scored.loc[index, "miss"] = peak <= 400.0
+        scored.loc[index, "miss_no_ch"] = window.eq(300.0).all()
+        scored.loc[index, "v_pred_peak"] = peak
+        scored.loc[index, "t_pred_peak"] = window.idxmax()
+        scored.loc[index, "underreporting_km_s"] = event.v_max - peak
+    return scored
+
+
+def build_hss_yearly_stats(catalogs, prediction_series, start_dt, end_dt):
+    """Aggregate event counts and signed peak shortfalls by event-start year."""
+    last_year = (pd.Timestamp(end_dt) - pd.Timedelta(nanoseconds=1)).year
+    years = pd.Index(
+        range(pd.Timestamp(start_dt).year, last_year + 1),
+        name="year",
+    )
+    count_columns = [
+        "n_events", "n_scored", "hit", "miss", "miss_no_ch", "n_underreporting"
+    ]
+    tables = {}
+    for sheet_name, satellite, _filename in HSS_EVENT_REFERENCES:
+        events = score_hss_events(
+            catalogs[sheet_name], prediction_series.get(satellite, pd.Series(dtype=float))
+        )
+        events["year"] = events.T_start.dt.year
+        yearly = events.groupby("year").agg(
+            n_events=("T_start", "size"),
+            n_scored=("n_scored", "sum"),
+            hit=("hit", "sum"),
+            miss=("miss", "sum"),
+            miss_no_ch=("miss_no_ch", "sum"),
+            n_underreporting=("underreporting_km_s", "count"),
+            mean_underreporting_km_s=("underreporting_km_s", "mean"),
+        ).reindex(years)
+        yearly[count_columns] = yearly[count_columns].fillna(0).astype(int)
+        yearly.insert(2, "n_unscored", yearly.n_events - yearly.n_scored)
+        for column in ["hit", "miss", "miss_no_ch"]:
+            yearly[f"{column}_rate"] = yearly[column] / yearly.n_scored.replace(0, np.nan)
+        tables[sheet_name] = yearly.reset_index()[
+            [
+                "year", "n_events", "n_scored", "n_unscored", "hit", "miss",
+                "miss_no_ch", "hit_rate", "miss_rate", "miss_no_ch_rate",
+                "n_underreporting", "mean_underreporting_km_s",
+            ]
+        ]
+    return tables
