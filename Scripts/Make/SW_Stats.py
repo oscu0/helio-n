@@ -141,6 +141,10 @@ def main(argv=None):
         "--event-stats-out", type=Path,
         help="Optional path for the annual event-based HSS statistics workbook.",
     )
+    parser.add_argument(
+        "--events-only", action="store_true",
+        help="Write only event-based HSS statistics from the archives and HSS CSVs.",
+    )
     args = parser.parse_args(argv)
 
     _cr, start_dt, end_dt = resolve_cr_or_date_range(args.start_or_cr, args.end)
@@ -156,54 +160,55 @@ def main(argv=None):
     assert satellite_ids, "Statistics require at least one satellite"
     missing = set(satellite_ids).difference(present_satellites)
     assert not missing, f"Satellites absent from archived series: {sorted(missing)}"
-    assert "ace" in satellite_ids, (
-        "The hourly workbook requires native ACE ('ace') for relative coordinates"
-    )
-
-    comparison_frames = _build_comparison_frames(series, satellite_ids)
-    comparison_frames = restore_observed_and_recurrent_series(
-        comparison_frames=comparison_frames,
-        start_dt=start_dt,
-        end_dt=end_dt,
-    )
-    # The per-CR archive is canonical and already carries the native SWX
-    # forecast samples. Match the former exporter: replace them only when the
-    # caller explicitly supplies a separate SWX source.
-    if args.swx_parquet is not None:
-        comparison_frames = restore_swx_series(
-            comparison_frames,
-            swx_path=args.swx_parquet,
+    if not args.events_only:
+        assert "ace" in satellite_ids, (
+            "The hourly workbook requires native ACE ('ace') for relative coordinates"
         )
 
-    satellite_frames = build_satellite_data_frames(
-        reproduction_frame=series,
-        comparison_frames=comparison_frames,
-        start_dt=start_dt,
-        end_dt=end_dt,
-    )
-    satellite_labels = {
-        sat_id: get_satellite_config(sat_id).label for sat_id in satellite_ids
-    }
-    per_cr_stats = build_sw_forecast_cr_stats_csv_frame(
-        comparison_frames=comparison_frames,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        sat_labels=satellite_labels,
-    )
-    global_stats = build_sw_forecast_stats(
-        comparison_frames=comparison_frames,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        sat_labels=satellite_labels,
-    )
-    global_stats.insert(0, "end_utc", end_dt)
-    global_stats.insert(0, "start_utc", start_dt)
-    yearly_stats = build_sw_forecast_yearly_stats(
-        comparison_frames=comparison_frames,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        sat_labels=satellite_labels,
-    )
+        comparison_frames = _build_comparison_frames(series, satellite_ids)
+        comparison_frames = restore_observed_and_recurrent_series(
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        # The per-CR archive is canonical and already carries the native SWX
+        # forecast samples. Match the former exporter: replace them only when the
+        # caller explicitly supplies a separate SWX source.
+        if args.swx_parquet is not None:
+            comparison_frames = restore_swx_series(
+                comparison_frames,
+                swx_path=args.swx_parquet,
+            )
+
+        satellite_frames = build_satellite_data_frames(
+            reproduction_frame=series,
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        satellite_labels = {
+            sat_id: get_satellite_config(sat_id).label for sat_id in satellite_ids
+        }
+        per_cr_stats = build_sw_forecast_cr_stats_csv_frame(
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            sat_labels=satellite_labels,
+        )
+        global_stats = build_sw_forecast_stats(
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            sat_labels=satellite_labels,
+        )
+        global_stats.insert(0, "end_utc", end_dt)
+        global_stats.insert(0, "start_utc", start_dt)
+        yearly_stats = build_sw_forecast_yearly_stats(
+            comparison_frames=comparison_frames,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            sat_labels=satellite_labels,
+        )
     event_catalogs = load_hss_event_catalogs(args.hss_list_dir, start_dt, end_dt)
     context_end = max(
         [end_dt]
@@ -231,13 +236,14 @@ def main(argv=None):
     event_stats_path = args.event_stats_out or (
         args.output_dir / f"SW {stamp} (Event-based).xlsx"
     )
-    write_satellite_data_workbook(satellite_frames, satellite_data_path)
-    write_per_cr_stats_workbook(per_cr_stats, per_cr_stats_path)
-    write_summary_stats_workbook(global_stats, yearly_stats, summary_stats_path)
+    if not args.events_only:
+        write_satellite_data_workbook(satellite_frames, satellite_data_path)
+        write_per_cr_stats_workbook(per_cr_stats, per_cr_stats_path)
+        write_summary_stats_workbook(global_stats, yearly_stats, summary_stats_path)
+        print(f"Saved {satellite_data_path} | {sum(map(len, satellite_frames.values()))} hourly rows")
+        print(f"Saved {per_cr_stats_path} | {len(per_cr_stats)} per-CR statistic rows")
+        print(f"Saved {summary_stats_path} | {len(global_stats)} global and {len(yearly_stats)} yearly statistic rows")
     write_event_stats_workbook(event_stats, event_stats_path)
-    print(f"Saved {satellite_data_path} | {sum(map(len, satellite_frames.values()))} hourly rows")
-    print(f"Saved {per_cr_stats_path} | {len(per_cr_stats)} per-CR statistic rows")
-    print(f"Saved {summary_stats_path} | {len(global_stats)} global and {len(yearly_stats)} yearly statistic rows")
     print(f"Saved {event_stats_path} | {sum(len(frame) for frame in event_stats.values())} yearly event rows")
     return 0
 

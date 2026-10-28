@@ -108,10 +108,12 @@ Implementation checks cover the 400 km/s boundary, constant-300 versus mixed raw
 
 Run with `conda run -n icme3.12-metal python Scripts/Make/SW_Stats.py <CR>` or supply a start and exclusive end timestamp. `--hss-list-dir` selects the catalog directory; `--event-stats-out` overrides the new workbook path.
 
+Add `--events-only` to generate only the event-based workbook. This mode reads the six versioned HSS CSVs and archived `manifest.json`, `series.parquet`, and `cube.h5` files. It does not load original CDAWeb/OMNI/ICME catalogs, restore recurrence observations, regenerate propagation, or write the other three workbooks. On another machine, use the local Conda environment and provide the archive root with `--archive-root` if necessary. The existing library imports still require the local `userpwd.py` configuration, but no database connection is made.
+
 ## Validation performed
 
 CR2306 and CR2307 were run end-to-end into `Outputs/SW/Diagnostics/hss-event-stats/CR2306` and `CR2307`. Annual event counts and underreporting were independently reconciled with the catalog rows and archived native model samples. All cell values in the six pre-existing hourly, per-CR, and summary workbooks matched their pre-change baselines. All six event worksheets in both workbooks were rendered and inspected.
 
-The 7 new event checks and 9 existing statistics/report checks pass. They cover missing reference peaks, the strict 400 threshold, exact-300 no-CH misses included in total misses, timing ties, padding, year boundaries, missing coverage, and Earth cube sampling distinct from native ACE.
+The 8 new event checks and 9 existing statistics/report checks pass. They cover missing reference peaks, the strict 400 threshold, exact-300 no-CH misses included in total misses, timing ties, padding, year boundaries, missing coverage, Earth cube sampling distinct from native ACE, and event-only execution without observation restoration or other report writers. Event-only runs on CR2306 and CR2307 each produced exactly one workbook, with every cell matching the corresponding full-run event workbook.
 
 The locally cached Yermolaev list ends in November 2024, while these two CRs cover December 2025 through February 2026. Its real-run worksheet therefore has zero reference events. Earth sampling and event arithmetic are checked with fixed synthetic inputs; no Yermolaev-versus-model score on overlapping historical data is claimed from these local runs.

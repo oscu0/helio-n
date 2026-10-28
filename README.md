@@ -179,6 +179,22 @@ Events belong to their start year, and incomplete model windows are unscored.
 This report ignores ICME flags. Catalogs default to `Outputs/HSS List`;
 `--hss-list-dir` and `--event-stats-out` override the inputs and output path.
 See `Analysis/HSS Validation Spec.md` for the complete definitions.
+Use `--events-only` to write just the event-based workbook, without rebuilding
+the other reports or loading the original observations/ICME catalogs:
+
+```bash
+conda run -n icme3.12-metal python Scripts/Make/SW_Stats.py 2306 --events-only
+```
+
+For another machine, use its available Conda environment and copy the existing
+CR archive directories (`manifest.json`, `series.parquet`, and `cube.h5`). The
+six HSS CSVs in `Outputs/HSS List` are versioned with the code. No propagation
+or catalog generation is needed. `--archive-root` selects a different archive
+location. Available neighboring CRs supply padding; unavailable context leaves
+affected events unscored.
+The usual local environment/configuration is still required, including
+`userpwd.py` for the existing library imports; event-only mode makes no database
+connection.
 `SW 4.ipynb` runs a CR 2306 SQL sample through the library functions directly,
 with separate cells for inspecting source inputs, prepared inputs, and the
 in-memory cube. Its sample archive and animation omit satellite comparisons.

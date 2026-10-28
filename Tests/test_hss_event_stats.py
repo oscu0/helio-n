@@ -3,6 +3,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -136,6 +137,51 @@ class HSSEventStatsTests(unittest.TestCase):
             predictions = SW_STATS.load_event_prediction_series(directory, hours[0], hours[-1] + pd.Timedelta(hours=1), ["ace"])
             self.assertEqual(predictions["earth"].tolist(), [300.0, 450.0, 500.0])
             self.assertEqual(predictions["ace"].tolist(), [610.0, 620.0, 630.0])
+
+    def test_events_only_needs_no_original_observation_sources(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr = root / "archive/CR2306"
+            cr.mkdir(parents=True)
+            hours = pd.date_range("2025-12-31 12:00", "2026-01-01 15:00", freq="h")
+            (cr / "manifest.json").write_text(json.dumps({
+                "start_utc": str(hours[0]), "end_utc": str(hours[-1] + pd.Timedelta(hours=1)),
+            }))
+            speed = np.full((len(hours), 1, 1), 300.0)
+            with h5py.File(cr / "cube.h5", "w") as cube:
+                cube["time_ns"] = hours.asi8
+                cube["phi"] = [0.0]
+                cube["r"] = [215.0]
+                cube["speed"] = speed
+                cube["is_slow_wind"] = speed == 300.0
+            pd.DataFrame({("satellite", "ace", "v_predict_raw"): 500.0}, index=hours).to_parquet(cr / "series.parquet")
+            catalogs = root / "catalogs"
+            catalogs.mkdir()
+            for _sheet, _sat, filename in HSS_EVENT_REFERENCES:
+                reference_event("2026-01-01", "2026-01-01 03:00").to_csv(catalogs / filename, index=False)
+            output = root / "output"
+            with patch.object(SW_STATS, "restore_observed_and_recurrent_series") as restore, patch.object(
+                SW_STATS, "write_satellite_data_workbook"
+            ) as write_hourly, patch.object(SW_STATS, "write_per_cr_stats_workbook") as write_cr, patch.object(
+                SW_STATS, "write_summary_stats_workbook"
+            ) as write_summary:
+                result = SW_STATS.main([
+                    "2306", "--events-only", "--archive-root", str(root / "archive"),
+                    "--hss-list-dir", str(catalogs), "--output-dir", str(output),
+                ])
+            self.assertEqual(result, 0)
+            restore.assert_not_called()
+            write_hourly.assert_not_called()
+            write_cr.assert_not_called()
+            write_summary.assert_not_called()
+            files = list(output.glob("*.xlsx"))
+            self.assertEqual(len(files), 1)
+            self.assertIn("(Event-based)", files[0].name)
+            book = load_workbook(files[0], data_only=True)
+            earth = list(book["Yermolaev checked - Earth"].values)
+            ace = list(book["B1 - ACE"].values)
+            self.assertEqual(earth[-1][5:7], (1, 1))
+            self.assertEqual(ace[-1][4:7], (1, 0, 0))
 
 
 if __name__ == "__main__":
