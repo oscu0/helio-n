@@ -41,7 +41,9 @@ t_pred_peak = earliest timestamp attaining that maximum
 
 An event has no CH contribution when every raw hourly model speed in the same padded window is exactly 300 km/s. Apply this criterion to Earth and every satellite, including ACE: its empirical slow-wind correction is applied to comparison series, not to the raw 2D cube. The event statistics do not require an exported slow-SW mask.
 
-The entire padded window must have finite model speed coverage to score an event. A partial window or missing forecast makes it `unscored`, not a miss. Load available adjacent CR/year data as needed rather than truncating the window at an export boundary. Missing context remains missing.
+At least one hourly model speed in the padded window must be finite to score an event. Use the available peak in a partial window; a window with no finite prediction remains `unscored`, not a miss, and does not enter rate denominators or mean underreporting. Load available adjacent CR/year data as needed rather than truncating the window at an export boundary. Missing context remains missing. The no-CH classification still requires every hour in the full padded window to equal 300 km/s; partial windows cannot establish it.
+
+For partial windows, a hit is established by an available value above 400 km/s. A miss describes only the available predictions: missing hours could contain a higher peak. Likewise, missing a model peak can increase the estimated underreporting. Interpret these results as using available model coverage downstream of the SDO observations.
 
 Each reference event is evaluated independently. Overlapping padded windows may use the same model samples; there is no one-to-one event or peak matching.
 
@@ -83,7 +85,7 @@ Each worksheet has these columns:
 | --- | --- |
 | `year` | UTC event-start year |
 | `n_events` | Selected reference events |
-| `n_scored` | Events with complete required model coverage |
+| `n_scored` | Events with at least one finite prediction in the padded window |
 | `n_unscored` | `n_events - n_scored` |
 | `hit` | Hit count |
 | `miss` | Total miss count, including no-CH misses |
@@ -102,7 +104,7 @@ Output: `Outputs/SW/SW <start>-<end> (Event-based).xlsx`, with the six worksheet
 
 The archive-stats entry point is `Scripts/Make/SW_Stats.py`, with calculations in `Library/SW/Stats.py` and workbook writing in `Library/SW/Report.py`. The implementation branch is based on the active `main` pipeline, with this chat's HSS notebook and spec carried over from the AATr archive branch.
 
-The event loader reads available CR series for satellite `v_predict_raw` and samples Earth from each archived cube using the existing comparison-frame sampler at HEE longitude 0 degrees and radius 215 solar radii. It does not modify archives or substitute an ACE series for Earth. Missing satellite series or missing time context produce unscored events.
+The event loader reads available CR series for satellite `v_predict_raw` and samples Earth from each archived cube using the existing comparison-frame sampler at HEE longitude 0 degrees and radius 215 solar radii. It does not modify archives or substitute an ACE series for Earth. Missing satellite series or entirely missing window coverage produce unscored events.
 
 Implementation checks cover the 400 km/s boundary, constant-300 versus mixed raw speeds, padded-window boundaries, cross-year assignment, incomplete coverage, mean underreporting including misses/negative values, Earth cube sampling distinct from ACE, and preservation of existing continuous-statistics reports. Existing `icme_flag` values are ignored completely: no exclusion, grouping, or weighting by ICME status.
 
@@ -112,8 +114,12 @@ Add `--events-only` to generate only the event-based workbook. This mode reads t
 
 ## Validation performed
 
+The following CR runs used the initial complete-coverage rule. They are retained as historical baselines; they have not been regenerated with the relaxed rule.
+
 CR2306 and CR2307 were run end-to-end into `Outputs/SW/Diagnostics/hss-event-stats/CR2306` and `CR2307`. Annual event counts and underreporting were independently reconciled with the catalog rows and archived native model samples. All cell values in the six pre-existing hourly, per-CR, and summary workbooks matched their pre-change baselines. All six event worksheets in both workbooks were rendered and inspected.
 
-The 8 new event checks and 9 existing statistics/report checks pass. They cover missing reference peaks, the strict 400 threshold, exact-300 no-CH misses included in total misses, timing ties, padding, year boundaries, missing coverage, Earth cube sampling distinct from native ACE, and event-only execution without observation restoration or other report writers. Event-only runs on CR2306 and CR2307 each produced exactly one workbook, with every cell matching the corresponding full-run event workbook.
+The original 8 event checks and 9 existing statistics/report checks passed. They cover missing reference peaks, the strict 400 threshold, exact-300 no-CH misses included in total misses, timing ties, padding, year boundaries, missing coverage, Earth cube sampling distinct from native ACE, and event-only execution without observation restoration or other report writers. Event-only runs on CR2306 and CR2307 each produced exactly one workbook, with every cell matching the corresponding full-run event workbook.
+
+After relaxing coverage, all 10 event checks and 9 existing statistics/report checks pass. Fixed before/after cases preserve complete and partial-window peaks and underreporting; an all-NaN window now remains unscored. Checks also verify that empty windows do not dilute annual rates and that partial 300 km/s windows do not receive the no-CH flag. The historical full-range comparison will be rerun separately on Miracle.
 
 The locally cached Yermolaev list ends in November 2024, while these two CRs cover December 2025 through February 2026. Its real-run worksheet therefore has zero reference events. Earth sampling and event arithmetic are checked with fixed synthetic inputs; no Yermolaev-versus-model score on overlapping historical data is claimed from these local runs.

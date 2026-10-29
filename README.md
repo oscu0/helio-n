@@ -175,7 +175,9 @@ and mean signed peak underreporting, with Yermolaev versus Earth and separate
 B1 sheets for each satellite. Misses include the no-CH subset (raw speed
 300 km/s throughout the event window). Peaks use the catalog interval padded
 by 12 hours on each side; the hit threshold is strictly above 400 km/s.
-Events belong to their start year, and incomplete model windows are unscored.
+Events belong to their start year. Partial model windows use the available
+peak; windows with no finite prediction are unscored. No-CH classification
+requires complete coverage at 300 km/s.
 This report ignores ICME flags. Catalogs default to `Outputs/HSS List`;
 `--hss-list-dir` and `--event-stats-out` override the inputs and output path.
 See `Analysis/HSS Validation Spec.md` for the complete definitions.
@@ -190,8 +192,8 @@ For another machine, use its available Conda environment and copy the existing
 CR archive directories (`manifest.json`, `series.parquet`, and `cube.h5`). The
 six HSS CSVs in `Outputs/HSS List` are versioned with the code. No propagation
 or catalog generation is needed. `--archive-root` selects a different archive
-location. Available neighboring CRs supply padding; unavailable context leaves
-affected events unscored.
+location. Available neighboring CRs supply padding; events remain unscored
+when their entire padded window has no finite prediction.
 The usual local environment/configuration is still required, including
 `userpwd.py` for the existing library imports; event-only mode makes no database
 connection.

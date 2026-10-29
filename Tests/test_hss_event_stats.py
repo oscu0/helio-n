@@ -58,15 +58,41 @@ class HSSEventStatsTests(unittest.TestCase):
         prediction.iloc[0] = 300.0
         self.assertTrue(score_hss_events(self.events, prediction).iloc[0].hit)
 
-    def test_missing_context_is_unscored(self):
+    def test_partial_context_uses_available_peak(self):
         prediction = pd.Series(500.0, index=self.hours)
         for incomplete in [prediction.iloc[1:], prediction.mask(prediction.index == self.hours[10])]:
             result = score_hss_events(self.events, incomplete).iloc[0]
+            self.assertTrue(result.n_scored)
+            self.assertTrue(result.hit)
+            self.assertFalse(result.miss)
+            self.assertEqual(result.v_pred_peak, 500.0)
+            self.assertEqual(result.underreporting_km_s, 100.0)
+        result = score_hss_events(self.events, pd.Series(300.0, index=self.hours[1:])).iloc[0]
+        self.assertTrue(result.miss)
+        self.assertFalse(result.miss_no_ch)
+
+    def test_no_finite_prediction_is_unscored(self):
+        for prediction in [pd.Series(dtype=float), pd.Series(np.nan, index=self.hours)]:
+            result = score_hss_events(self.events, prediction).iloc[0]
             self.assertFalse(result.n_scored)
             self.assertFalse(result.hit)
             self.assertFalse(result.miss)
             self.assertFalse(result.miss_no_ch)
+            self.assertTrue(pd.isna(result.v_pred_peak))
             self.assertTrue(pd.isna(result.underreporting_km_s))
+
+    def test_empty_window_does_not_dilute_yearly_rates(self):
+        events = pd.concat([
+            self.events, reference_event("2026-01-04", "2026-01-04 03:00"),
+        ], ignore_index=True)
+        catalogs = {sheet: events for sheet, _sat, _filename in HSS_EVENT_REFERENCES}
+        prediction = pd.Series(500.0, index=self.hours[1:])
+        predictions = {sat: prediction for _sheet, sat, _filename in HSS_EVENT_REFERENCES}
+        row = build_hss_yearly_stats(catalogs, predictions, "2026-01-01", "2027-01-01")["B1 - ACE"].iloc[0]
+        self.assertEqual(row[["n_events", "n_scored", "n_unscored"]].tolist(), [2, 1, 1])
+        self.assertEqual(row[["hit", "miss", "n_underreporting"]].tolist(), [1, 0, 1])
+        self.assertEqual(row.hit_rate, 1.0)
+        self.assertEqual(row.mean_underreporting_km_s, 100.0)
 
     def test_cross_year_aggregation_and_missing_reference_peak(self):
         events = pd.concat([

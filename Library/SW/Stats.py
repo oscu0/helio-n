@@ -764,8 +764,8 @@ def score_hss_events(events, predicted_speed):
             event.T_start - padding, event.T_end + padding, freq=SCORE_FREQ
         )
         window = prediction.reindex(hours)
-        # if not np.isfinite(window.to_numpy()).all():
-        #     continue
+        if not np.isfinite(window.to_numpy()).any():
+            continue
         peak = float(window.max())
         scored.loc[index, "n_scored"] = True
         scored.loc[index, "hit"] = peak > 400.0
