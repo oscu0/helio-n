@@ -191,6 +191,12 @@ class SatelliteConfigTests(unittest.TestCase):
                     "X_GSE": 30.0,
                     "Y_GSE": 2.0,
                     "Z_GSE": -1.0,
+                    "B_X_HEE": -3.0,
+                    "B_Y_HEE": -4.0,
+                    "B_Z_HEE": 0.0,
+                    "X_HEE": 22000.0,
+                    "Y_HEE": -2.0,
+                    "Z_HEE": -1.0,
                 },
                 index=source_index,
             )
@@ -207,6 +213,12 @@ class SatelliteConfigTests(unittest.TestCase):
                     "Y_GSE": -4000.0,
                     "Z_GSE": 300.0,
                     "radialDistance": 23000.0,
+                    "B_X_HEE": -1.0,
+                    "B_Y_HEE": -2.0,
+                    "B_Z_HEE": 2.0,
+                    "X_HEE": 3000.0,
+                    "Y_HEE": 4000.0,
+                    "Z_HEE": 300.0,
                 },
                 index=source_index,
             )
@@ -214,7 +226,8 @@ class SatelliteConfigTests(unittest.TestCase):
                 "2013-01-01", periods=18, freq="1h", tz="UTC", name="Epoch"
             )
             stereo_b = stereo.set_axis(stereo_b_index)
-            psp = stereo.assign(V_X_GSE=10.0, V_Y_GSE=20.0, V_Z_GSE=30.0)
+            psp = stereo.assign(V_X_GSE=10.0, V_Y_GSE=20.0, V_Z_GSE=30.0,
+                                V_X_HEE=-10.0, V_Y_HEE=-20.0, V_Z_HEE=30.0)
             solo = psp.copy()
             ace.to_parquet(ace_path)
             stereo.to_parquet(stereo_path)
@@ -244,15 +257,19 @@ class SatelliteConfigTests(unittest.TestCase):
         self.assertEqual(ace_frame.loc[start, "b_x_gse"], 3.0)
         self.assertNotEqual(ace_frame.loc[start, "x_hee_au"], 1.0)
         self.assertEqual(ace_frame.attrs["source"], "CDAWeb merged ACE")
-        self.assertEqual(ace_frame.attrs["position_source"], "merged GSE position in Earth radii")
+        self.assertAlmostEqual(ace_frame.loc[start, "x_hee_au"], 22000.0 * 6378.0 / 149597870.7)
+        self.assertEqual(ace_frame.loc[start, "b_x_hee"], -3.0)
+        self.assertEqual(ace_frame.attrs["position_source"], "merged HEE position in Earth radii")
         self.assertEqual(stereo_frame.loc[start, "v"], 420.0)
         self.assertEqual(stereo_frame.loc[start, "t"], 90000.0)
-        self.assertEqual(stereo_frame.attrs["source_coord_frame"], "GSE")
+        self.assertEqual(stereo_frame.attrs["source_coord_frame"], "HEE")
+        self.assertAlmostEqual(stereo_frame.loc[start, "x_hee_au"], 3000.0 * 6378.0 / 149597870.7)
         self.assertEqual(stereo_frame.attrs["source"], "CDAWeb merged STEREO-A")
         self.assertTrue(stereo_frame.attrs["archive_path"].endswith(stereo_path.name))
         for sat_id in ("psp", "solo"):
             self.assertEqual(frames[sat_id].loc[start, "v"], 420.0)
             self.assertEqual(frames[sat_id].loc[start, "v_x_gse"], 10.0)
+            self.assertEqual(frames[sat_id].loc[start, "v_x_hee"], -10.0)
             self.assertEqual(frames[sat_id].attrs["coord_frame"], "HEE")
         self.assertTrue(frames["stereo_b"]["v"].isna().all())
         self.assertEqual(stereo_b_frame.loc[pd.Timestamp("2013-01-01 08:00"), "v"], 420.0)
@@ -294,6 +311,12 @@ class SatelliteConfigTests(unittest.TestCase):
                 "X_GSE": x_gse,
                 "Y_GSE": 2.0,
                 "Z_GSE": -1.0,
+                "B_X_HEE": -3.0,
+                "B_Y_HEE": -4.0,
+                "B_Z_HEE": 0.0,
+                "X_HEE": np.where(np.isfinite(x_gse), 22000.0, np.nan),
+                "Y_HEE": -2.0,
+                "Z_HEE": -1.0,
             },
             index=source_index,
         )

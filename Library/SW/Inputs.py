@@ -88,12 +88,18 @@ SATELLITE_FRAME_COLUMNS = [
     "v_x_gse",
     "v_y_gse",
     "v_z_gse",
+    "v_x_hee",
+    "v_y_hee",
+    "v_z_hee",
     "N",
     "t",
     "b",
     "b_x_gse",
     "b_y_gse",
     "b_z_gse",
+    "b_x_hee",
+    "b_y_hee",
+    "b_z_hee",
     "b_r_rtn",
     "b_t_rtn",
     "b_n_rtn",
@@ -460,12 +466,18 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
         "b_x_gse": ("B_X_GSE",),
         "b_y_gse": ("B_Y_GSE",),
         "b_z_gse": ("B_Z_GSE",),
+        "b_x_hee": ("B_X_HEE",),
+        "b_y_hee": ("B_Y_HEE",),
+        "b_z_hee": ("B_Z_HEE",),
         "b_r_rtn": ("b_r", "Br"),
         "b_t_rtn": ("b_t", "Bt"),
         "b_n_rtn": ("b_n", "Bn"),
         "v_x_gse": ("V_X_GSE",),
         "v_y_gse": ("V_Y_GSE",),
         "v_z_gse": ("V_Z_GSE",),
+        "v_x_hee": ("V_X_HEE",),
+        "v_y_hee": ("V_Y_HEE",),
+        "v_z_hee": ("V_Z_HEE",),
     }.items():
         if canonical not in df_sat.columns:
             for candidate in candidates:
@@ -495,6 +507,7 @@ def normalize_satellite_frame(df_sat_raw, sat, label=None):
     )
     for components in (
         ("b_x_gse", "b_y_gse", "b_z_gse"),
+        ("b_x_hee", "b_y_hee", "b_z_hee"),
         ("b_r_rtn", "b_t_rtn", "b_n_rtn"),
     ):
         if "b" not in df_sat.columns and set(components).issubset(df_sat.columns):
@@ -680,22 +693,20 @@ def load_cdaweb_ace_frame(archive_root, time_axis, time_freq):
         pd.Timestamp(time_axis.min()) - margin,
         pd.Timestamp(time_axis.max()) + margin,
     )
-    required = {"B_X_GSE", "B_Y_GSE", "B_Z_GSE", "B", "V", "N_p", "X_GSE", "Y_GSE", "Z_GSE"}
+    required = {"B_X_HEE", "B_Y_HEE", "B_Z_HEE", "B", "V", "N_p", "X_HEE", "Y_HEE", "Z_HEE"}
     missing = required.difference(source.columns)
     assert not missing, f"Merged CDAWeb ACE product lacks columns: {sorted(missing)}"
-    source["x_gse_km"] = pd.to_numeric(source["X_GSE"], errors="coerce") * EARTH_RADIUS_KM
-    source["y_gse_km"] = pd.to_numeric(source["Y_GSE"], errors="coerce") * EARTH_RADIUS_KM
-    source["z_gse_km"] = pd.to_numeric(source["Z_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    for axis in "xyz":
+        source[f"{axis}_hee_au"] = pd.to_numeric(source[f"{axis.upper()}_HEE"], errors="coerce") * EARTH_RADIUS_KM / AU_KM
     frame = normalize_satellite_frame(source, DEFAULT_ACE_SAT, DEFAULT_ACE_LABEL)
     frame = frame.resample(time_freq).mean()
     frame = interpolate_short_gaps(frame, time_axis)
-    positions = _transform_ace_gse_columns_to_hee(frame)
-    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
     frame.attrs.update(source.attrs)
     frame.attrs["coord_frame"] = "HEE"
     frame.attrs["position_static"] = False
     frame.attrs["source"] = "CDAWeb merged ACE"
-    frame.attrs["position_source"] = "merged GSE position in Earth radii"
+    frame.attrs["source_coord_frame"] = "HEE"
+    frame.attrs["position_source"] = "merged HEE position in Earth radii"
     return frame
 
 
@@ -709,16 +720,15 @@ def load_cdaweb_coho_frame(archive_root, sat_id, time_axis, time_freq):
         pd.Timestamp(time_axis.max()) + margin,
     )
     required = {
-        "B_X_GSE", "B_Y_GSE", "B_Z_GSE", "B", "N_p", "V", "T_p",
-        "X_GSE", "Y_GSE", "Z_GSE", "radialDistance",
+        "B_X_HEE", "B_Y_HEE", "B_Z_HEE", "B", "N_p", "V", "T_p",
+        "X_HEE", "Y_HEE", "Z_HEE", "radialDistance",
     }
     if mission in {"psp", "solo"}:
-        required.update({"V_X_GSE", "V_Y_GSE", "V_Z_GSE"})
+        required.update({"V_X_HEE", "V_Y_HEE", "V_Z_HEE"})
     missing = required.difference(source.columns)
     assert not missing, f"Merged CDAWeb {mission} product lacks columns: {sorted(missing)}"
-    source["x_gse_km"] = pd.to_numeric(source["X_GSE"], errors="coerce") * EARTH_RADIUS_KM
-    source["y_gse_km"] = pd.to_numeric(source["Y_GSE"], errors="coerce") * EARTH_RADIUS_KM
-    source["z_gse_km"] = pd.to_numeric(source["Z_GSE"], errors="coerce") * EARTH_RADIUS_KM
+    for axis in "xyz":
+        source[f"{axis}_hee_au"] = pd.to_numeric(source[f"{axis.upper()}_HEE"], errors="coerce") * EARTH_RADIUS_KM / AU_KM
     radial_distance = pd.to_numeric(source["radialDistance"], errors="coerce")
     config = get_satellite_config(sat_id)
     frame = normalize_satellite_frame(source, sat_id, config.label)
@@ -728,13 +738,7 @@ def load_cdaweb_coho_frame(archive_root, sat_id, time_axis, time_freq):
         radial_distance.to_frame("radialDistance").resample(time_freq).mean(),
         time_axis,
     )["radialDistance"]
-    positions = _hee_cartesian_from_gse(
-        frame.index,
-        frame["x_gse_km"],
-        frame["y_gse_km"],
-        frame["z_gse_km"],
-    )
-    frame[["x_hee_au", "y_hee_au", "z_hee_au"]] = positions
+    positions = frame[["x_hee_au", "y_hee_au", "z_hee_au"]]
     frame["phi_target"] = np.mod(
         np.degrees(np.arctan2(positions["y_hee_au"], positions["x_hee_au"])),
         360.0,
@@ -754,12 +758,12 @@ def load_cdaweb_coho_frame(archive_root, sat_id, time_axis, time_freq):
     frame.attrs["sat"] = sat_id
     frame.attrs["label"] = config.label
     frame.attrs["coord_frame"] = "HEE"
-    frame.attrs["source_coord_frame"] = "GSE"
+    frame.attrs["source_coord_frame"] = "HEE"
     frame.attrs["source"] = f"CDAWeb merged {config.label}"
     frame.attrs["position_source"] = (
-        "merged COHO position in Earth radii"
+        "merged COHO HEE position in Earth radii"
         if mission == "stereo-a"
-        else "JPL Horizons position in Earth radii"
+        else "JPL Horizons HEE position in Earth radii"
     )
     return frame
 

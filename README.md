@@ -135,7 +135,15 @@ exactly. Every animation frame labels its current CR. The movie command never
 runs propagation.
 ACE, STEREO-A, STEREO-B, PSP, and Solar Orbiter validation observations come
 from their post-merge CDAWeb products under `Data/CDAWeb Validation/merged/`;
-intermediate `chunks/` are ignored. Propagation defaults to all five
+intermediate `chunks/` are ignored. These Parquets carry both GSE and HEE
+components. The ingester reads HEE positions directly (Earth radii converted
+to AU) and retains frame-labelled magnetic and velocity components. It does
+not transform the CDAWeb GSE positions during ingestion. Native ACE remains
+separate from the propagated ACE-at-Earth reference. Use Shock-and-Awe's
+`cdaweb_archive.py upgrade` for older GSE-only merged products, and run its
+`cdaweb_xlsx.py` separately to export hourly workbooks with blank data-gap
+rows inside each mission's applicable interval.
+Propagation defaults to all five
 validation spacecraft; `--satellites all` can make that selection explicit.
 Each per-CR manifest records the merged product path and checksum. Sequential
 reuse accepts an existing archive whose satellite set is a superset of the
