@@ -6,7 +6,9 @@ import json
 import multiprocessing as mp
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import astropy.units as u
 import matplotlib
 matplotlib.use("Agg")
 import numpy as np
@@ -22,6 +24,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from Library.Config import filament_feature_workers, paths
+from Library.Filament_Stats import (
+    KISLOVODSK_RADII_ARCSEC,
+    REFERENCE_ANGLE_DEG,
+    REFERENCE_OVERLAP,
+    SCORE_COLUMNS,
+    collect_stats_frame,
+    initialize_stats_worker,
+    yearly_catalog_stats,
+)
 from Library.Filaments import (
     CATALOG_ALIGNMENT_TOLERANCE_DEG,
     CATALOG_DISTANCE_QUANTILE,
@@ -32,6 +43,7 @@ from Library.Filaments import (
     MAGFILO_MIN_ALIGNED_CENTERLINE_PX,
     MAGFILO_POLYGON_TOLERANCE_PX,
     MAGFILO_SUPPORT_RADIUS_PX,
+    boundary_contact_lengths,
     build_filament_feature_table,
     compute_catalog_centerline_metrics,
     compute_magfilo_centerline_metrics,
@@ -39,6 +51,7 @@ from Library.Filaments import (
     load_kislovodsk_catalog,
     magfilo_is_filament,
     rasterize_catalog_segments,
+    sample_filament_spines,
     select_catalog_segments,
 )
 from Library.GONG import (
@@ -285,6 +298,148 @@ def magfilo_fits_by_name(fits_root):
     return paths_by_name
 
 
+def run_catalog_stats(args, output_dir):
+    start, end = pd.to_datetime([args.start, args.end], format="%Y%m%d")
+    assert start <= end, "The start date must precede or equal the end date."
+    catalogs = ("kislovodsk", "magfilo") if args.stats_catalog == "both" else (args.stats_catalog,)
+    destination = args.stats_output_dir or (
+        output_dir / f"Catalog Stats {args.stats_catalog} {args.start}-{args.end}"
+    )
+    assert not destination.exists(), f"Choose a new output directory: {destination}"
+    paths_df = pd.read_parquet(args.paths_parquet).sort_index()
+    paths_df = paths_df.loc[f"{args.start}_0000":f"{args.end}_9999", ["fits_path", "mask_path"]]
+    if args.max_frames is not None:
+        paths_df = paths_df.iloc[:args.max_frames]
+    assert len(paths_df) and paths_df.index.is_unique, "Expected unique frame keys in the interval."
+    masks = paths_df["mask_path"].dropna().astype(str)
+    assert masks.str.endswith("_CH_MASK_FINAL.png").all(), (
+        "Catalog statistics require final IDL masks. Rebuild the dataset index with Scripts/Make.py Dataset."
+    )
+    frame_times = pd.Series(pd.to_datetime(paths_df.index, format="%Y%m%d_%H%M"), index=paths_df.index)
+    mask_times = pd.to_datetime(masks.map(lambda path: Path(path).name[3:16]), format="%Y%m%d_%H%M")
+    paths_df["mask_offset_minutes"] = (mask_times - frame_times).dt.total_seconds() / 60
+    paths_df["input_status"] = "ready"
+    for column, status in (("fits_path", "missing_aia"), ("mask_path", "missing_mask")):
+        missing = ~paths_df[column].map(lambda path: pd.notna(path) and Path(path).is_file())
+        paths_df.loc[missing & paths_df["input_status"].eq("ready"), "input_status"] = status
+    paths_df.loc[
+        paths_df["input_status"].eq("ready") & paths_df["mask_offset_minutes"].ne(0),
+        "input_status",
+    ] = "mask_frame_mismatch"
+
+    k_catalog = pd.DataFrame(columns=["datetime", "lat1", "lon1", "lat2", "lon2"])
+    if "kislovodsk" in catalogs:
+        assert np.isfinite(args.catalog_window_hours) and args.catalog_window_hours > 0
+        pad = pd.Timedelta(hours=args.catalog_window_hours)
+        k_catalog = load_kislovodsk_catalog(args.catalog)
+        k_catalog = k_catalog.loc[k_catalog["datetime"].between(start - pad, end + pd.Timedelta(days=1) + pad)]
+    magfilo_matches = {}
+    magfilo_fits = {}
+    magfilo_path = None
+    if "magfilo" in catalogs:
+        assert np.isfinite(args.magfilo_window_hours) and args.magfilo_window_hours > 0
+        magfilo_path = args.magfilo_catalog
+        observations = magfilo_observations(load_magfilo(magfilo_path))
+        eligible = paths_df.loc[paths_df["input_status"].eq("ready")]
+        if not eligible.empty:
+            pad = pd.Timedelta(hours=args.magfilo_window_hours)
+            observations = observations.loc[
+                observations["observation_dt"].between(start - pad, end + pd.Timedelta(days=1) + pad)
+            ]
+            magfilo_matches, _ = matched_magfilo_frames(eligible, observations, args.magfilo_window_hours)
+            magfilo_fits = magfilo_fits_by_name(args.magfilo_fits_root)
+
+    tasks = []
+    for frame_key, row in paths_df.iterrows():
+        frame_time = frame_times[frame_key]
+        k_filaments = k_catalog.iloc[:0]
+        if row.input_status == "ready" and not k_catalog.empty:
+            k_filaments = select_catalog_segments(k_catalog, frame_time, args.catalog_window_hours)
+        k_time = k_filaments["datetime"].iloc[0] if len(k_filaments) else pd.NaT
+        frame = {
+            "input_status": row.input_status,
+            "mask_offset_minutes": row.mask_offset_minutes,
+            "kislovodsk_status": "no_match" if "kislovodsk" in catalogs else "disabled",
+            "kislovodsk_time_utc": k_time,
+            "kislovodsk_offset_hours": (k_time - frame_time).total_seconds() / 3600,
+            "kislovodsk_segments": len(k_filaments),
+            "magfilo_status": "no_match" if "magfilo" in catalogs else "disabled",
+            "magfilo_time_utc": pd.NaT,
+            "magfilo_offset_hours": np.nan,
+            "magfilo_url": None,
+            "magfilo_fits_path": None,
+            "magfilo_projected_annotations": None,
+        }
+        if len(k_filaments):
+            frame["kislovodsk_status"] = "matched"
+        magfilo = None
+        if frame_key in magfilo_matches:
+            match = min(magfilo_matches[frame_key], key=lambda m: m["time_offset_hours"])
+            obs = match["observation"]
+            fits_path = magfilo_fits.get(Path(obs.url).stem + ".fits.fz")
+            frame.update(
+                magfilo_status="matched" if fits_path is not None else "missing_gong_fits",
+                magfilo_time_utc=obs.observation_dt,
+                magfilo_offset_hours=(obs.observation_dt - frame_time).total_seconds() / 3600,
+                magfilo_url=obs.url,
+                magfilo_fits_path=str(fits_path) if fits_path is not None else None,
+            )
+            magfilo = {"image_ids": obs.image_ids, "fits_path": fits_path}
+        tasks.append((frame_key, row.fits_path, row.mask_path, k_filaments, magfilo, frame))
+
+    if args.workers == 1:
+        initialize_stats_worker(magfilo_path)
+        results = list(tqdm(map(collect_stats_frame, tasks), total=len(tasks), desc="Catalog statistics"))
+    else:
+        with ProcessPoolExecutor(
+            max_workers=args.workers, mp_context=mp.get_context("spawn"),
+            initializer=initialize_stats_worker, initargs=(magfilo_path,),
+        ) as executor:
+            results = list(tqdm(executor.map(collect_stats_frame, tasks), total=len(tasks), desc="Catalog statistics"))
+    frames = pd.DataFrame([frame for frame, _ in results])
+    scores = pd.DataFrame(
+        [score for _, rows in results for score in rows], columns=SCORE_COLUMNS
+    )
+    annual = yearly_catalog_stats(frames, scores, range(start.year, end.year + 1), catalogs)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=destination.parent) as temporary:
+        staging = Path(temporary) / "results"
+        staging.mkdir()
+        frames.to_parquet(staging / "frames.parquet", index=False)
+        scores.to_parquet(staging / "component-scores.parquet", index=False)
+        annual.to_csv(staging / "yearly-thresholds.csv", index=False)
+        (staging / "parameters.json").write_text(json.dumps({
+            "start": args.start,
+            "end": args.end,
+            "paths_parquet": str(args.paths_parquet.resolve()),
+            "max_frames": args.max_frames,
+            "catalogs": catalogs,
+            "kislovodsk_catalog": str(args.catalog.resolve()) if "kislovodsk" in catalogs else None,
+            "magfilo_catalog": str(magfilo_path.resolve()) if magfilo_path is not None else None,
+            "magfilo_fits_root": str(args.magfilo_fits_root.resolve()) if magfilo_path is not None else None,
+            "kislovodsk_window_hours": args.catalog_window_hours,
+            "magfilo_window_hours": args.magfilo_window_hours,
+            "kislovodsk_radii_arcsec": KISLOVODSK_RADII_ARCSEC,
+            "reference_overlap_fraction": REFERENCE_OVERLAP,
+            "reference_angle_q80_deg": REFERENCE_ANGLE_DEG,
+            "matching_time": "UTC frame key at minute resolution",
+            "mask_matching": "require the mask filename to match the AIA frame key to the minute",
+            "magfilo_matching": "nearest AIA frame per GONG exposure, then nearest exposure per AIA frame",
+            "count_unit": "one connected component per image per catalog and threshold",
+            "kislovodsk_overlap": "fraction of CH skeleton length near finite segments from the matched exposure",
+            "magfilo_overlap": "fraction of CH component area inside a single annotation polygon",
+            "orientation": "arc-length-weighted 80th percentile undirected local angle on supported skeleton",
+        }, indent=2) + "\n")
+        staging.rename(destination)
+    print(f"Saved {len(frames)} frames, {len(scores)} score rows, and annual sweeps to {destination}")
+    print("Frame inputs:", frames["input_status"].value_counts().to_dict())
+    for catalog in catalogs:
+        status = frames.loc[frames["input_status"].eq("ready"), f"{catalog}_status"]
+        print(f"{catalog} coverage:", status.value_counts().to_dict())
+    return 0
+
+
 def initialize_overlap_worker(magfilo_catalog_path, magfilo_fits_root):
     global OVERLAP_MAGFILO_CATALOG, OVERLAP_MAGFILO_FITS
     OVERLAP_MAGFILO_CATALOG = load_magfilo(magfilo_catalog_path)
@@ -292,7 +447,7 @@ def initialize_overlap_worker(magfilo_catalog_path, magfilo_fits_root):
 
 
 def build_catalog_overlap_frame(task):
-    """Return raw catalog/component contacts without feature calculation.
+    """Measure raw catalog/component contacts or aligned boundary runs.
 
     Kislovodsk has no widths, so a contact is any candidate skeleton pixel
     within the supplied support radius.  MAGFiLO supplies polygons, so direct
@@ -306,6 +461,7 @@ def build_catalog_overlap_frame(task):
         magfilo_matches_for_frame,
         catalog_support_radius_px,
         magfilo_polygon_tolerance_px,
+        boundary_contact,
     ) = task
     candidate_mask = prepare_mask(observation["mask_path"]).astype(bool)
     labels, component_count = ndimage.label(
@@ -325,11 +481,15 @@ def build_catalog_overlap_frame(task):
         "magfilo_annotations": int(
             sum(match["filament_annotations"] for match in magfilo_matches_for_frame)
         ),
-        "kislovodsk_contact_components": 0,
-        "magfilo_direct_overlap_components": 0,
-        "magfilo_tolerance_overlap_components": 0,
-        "any_contact_components": 0,
     }
+    if boundary_contact is not None:
+        summary["kislovodsk_boundary_contact_components"] = 0
+        summary["magfilo_boundary_contact_components"] = 0
+    else:
+        summary["kislovodsk_contact_components"] = 0
+        summary["magfilo_direct_overlap_components"] = 0
+        summary["magfilo_tolerance_overlap_components"] = 0
+    summary["any_contact_components"] = 0
     if component_count == 0 or not (kislovodsk_available or magfilo_available):
         return [], summary
 
@@ -338,9 +498,10 @@ def build_catalog_overlap_frame(task):
     aia_map = sunpy.map.Map(observation["fits_path"])
     assert candidate_mask.shape == aia_map.data.shape
     if kislovodsk_available:
-        kislovodsk_mask, rasterized_segments = rasterize_catalog_segments(
-            aia_map,
-            kislovodsk_filaments,
+        kislovodsk_mask, rasterized_segments, kislovodsk_segments = (
+            rasterize_catalog_segments(
+                aia_map, kislovodsk_filaments, return_projected_segments=True
+            )
         )
         kislovodsk_distance = (
             ndimage.distance_transform_edt(~kislovodsk_mask)
@@ -349,11 +510,12 @@ def build_catalog_overlap_frame(task):
         )
     else:
         rasterized_segments = 0
+        kislovodsk_segments = np.empty((0, 4))
         kislovodsk_distance = np.full(candidate_mask.shape, np.inf)
     summary["kislovodsk_segments_rasterized"] = rasterized_segments
 
+    projected_magfilo = []
     if magfilo_available:
-        projected_magfilo = []
         for magfilo_match in magfilo_matches_for_frame:
             fits_name = Path(magfilo_match["url"]).stem + ".fits.fz"
             assert fits_name in OVERLAP_MAGFILO_FITS, (
@@ -368,6 +530,36 @@ def build_catalog_overlap_frame(task):
                     aia_map,
                 )
             )
+
+    if boundary_contact is not None:
+        distance_arcsec, angle_deg, min_run_arcsec = boundary_contact
+        scale_arcsec = np.abs(u.Quantity(aia_map.scale).to_value(u.arcsec / u.pix))
+        curves = {
+            "kislovodsk": sample_filament_spines(
+                kislovodsk_segments.reshape(-1, 2, 2), scale_arcsec
+            ),
+            "magfilo": sample_filament_spines(
+                [annotation["spine"] for annotation in projected_magfilo], scale_arcsec
+            ),
+        }
+        records = []
+        for component_id in range(1, component_count + 1):
+            longest = boundary_contact_lengths(
+                labels == component_id, scale_arcsec, curves, distance_arcsec, angle_deg
+            )
+            record = {"frame_key": frame_key, "component_id": component_id}
+            any_contact = False
+            for catalog, length in longest.items():
+                contact = length >= min_run_arcsec
+                record[f"{catalog}_aligned_boundary_run_arcsec"] = length
+                record[f"{catalog}_boundary_contact"] = contact if np.isfinite(length) else pd.NA
+                summary[f"{catalog}_boundary_contact_components"] += int(contact)
+                any_contact |= contact
+            summary["any_contact_components"] += int(any_contact)
+            records.append(record)
+        return records, summary
+
+    if magfilo_available:
         magfilo_polygon_mask = rasterize_projected_annotations(
             projected_magfilo,
             candidate_mask.shape,
@@ -443,6 +635,7 @@ def build_catalog_overlap_table(
     workers,
     magfilo_catalog_path,
     magfilo_fits_root,
+    boundary_contact=None,
 ):
     assert workers >= 1
     tasks = []
@@ -472,6 +665,7 @@ def build_catalog_overlap_table(
                 magfilo_matches_for_frame,
                 catalog_support_radius_px,
                 magfilo_polygon_tolerance_px,
+                boundary_contact,
             )
         )
 
@@ -504,7 +698,18 @@ def build_catalog_overlap_table(
             ):
                 records.extend(frame_records)
                 summaries.append(summary)
-    return pd.DataFrame(records), pd.DataFrame(summaries), len(tasks)
+    overlaps = pd.DataFrame(records)
+    if boundary_contact is not None:
+        column_types = {
+            "frame_key": "string",
+            "component_id": "int64",
+            "kislovodsk_aligned_boundary_run_arcsec": "float64",
+            "kislovodsk_boundary_contact": "boolean",
+            "magfilo_aligned_boundary_run_arcsec": "float64",
+            "magfilo_boundary_contact": "boolean",
+        }
+        overlaps = overlaps.reindex(columns=list(column_types)).astype(column_types)
+    return overlaps, pd.DataFrame(summaries), len(tasks)
 
 
 def build_catalog_label_table(
@@ -826,11 +1031,11 @@ def main(argv=None):
     parser.add_argument("end", help="inclusive YYYYMMDD")
     parser.add_argument(
         "--mode",
-        choices=("train", "labels", "review", "overlaps"),
+        choices=("train", "labels", "review", "overlaps", "boundary-contacts", "catalog-stats"),
         default="train",
         help=(
             "Run model training, build labels, render the MAGFiLO review gallery, "
-            "or scan raw catalog/component contacts."
+            "scan raw or aligned CH boundary contacts, or collect yearly catalog statistics."
         ),
     )
     parser.add_argument(
@@ -858,11 +1063,28 @@ def main(argv=None):
         default=ROOT_DIR / "Data" / "MAGFiLO",
     )
     parser.add_argument("--magfilo-window-hours", type=float, default=0.5)
+    parser.add_argument(
+        "--stats-catalog", choices=("both", "kislovodsk", "magfilo"), default="both",
+        help="Catalog coverage to measure in catalog-stats mode.",
+    )
+    parser.add_argument("--stats-output-dir", type=Path, help="New directory for catalog-stats outputs.")
     parser.add_argument("--features-parquet", type=Path)
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--validation-fraction", type=float, default=0.2)
     parser.add_argument("--catalog-window-hours", type=float, default=0.5)
     parser.add_argument("--catalog-support-radius-px", type=float, default=10.0)
+    parser.add_argument(
+        "--boundary-distance-arcsec", type=float, default=12.0,
+        help="Maximum spine-to-boundary separation in boundary-contacts mode.",
+    )
+    parser.add_argument(
+        "--boundary-angle-deg", type=float, default=30.0,
+        help="Maximum undirected tangent difference in boundary-contacts mode.",
+    )
+    parser.add_argument(
+        "--boundary-min-run-arcsec", type=float, default=36.0,
+        help="Minimum continuous qualifying spine length in boundary-contacts mode.",
+    )
     parser.add_argument(
         "--catalog-alignment-tolerance-deg",
         type=float,
@@ -930,8 +1152,20 @@ def main(argv=None):
     features_path = args.features_parquet or output_dir / f"Features {stem}.parquet"
     model_path = args.model_path or output_dir / f"Classifier {stem}.json"
 
-    if args.mode == "overlaps":
+    if args.mode == "catalog-stats":
+        return run_catalog_stats(args, output_dir)
+
+    if args.mode in ("overlaps", "boundary-contacts"):
         assert args.magfilo_window_hours > 0.0
+        boundary_contact = None
+        if args.mode == "boundary-contacts":
+            boundary_contact = (
+                args.boundary_distance_arcsec,
+                args.boundary_angle_deg,
+                args.boundary_min_run_arcsec,
+            )
+            assert np.isfinite(boundary_contact).all() and min(boundary_contact) > 0
+            assert args.boundary_angle_deg < 90
         paths_df = pd.read_parquet(args.paths_parquet)
         start_key = f"{args.start}_0000"
         end_key = f"{args.end}_9999"
@@ -965,10 +1199,23 @@ def main(argv=None):
             args.workers,
             args.magfilo_catalog,
             args.magfilo_fits_root,
+            boundary_contact,
         )
+        output_name = "Overlap Scan"
+        if boundary_contact is not None:
+            output_name = "Boundary Contacts"
+            parameters = {
+                "max_distance_arcsec": args.boundary_distance_arcsec,
+                "max_tangent_difference_deg": args.boundary_angle_deg,
+                "min_run_arcsec": args.boundary_min_run_arcsec,
+                "kislovodsk_window_hours": args.catalog_window_hours,
+                "magfilo_window_hours": args.magfilo_window_hours,
+            }
+            overlaps.attrs["boundary_contact"] = parameters
+            overlap_frames.attrs["boundary_contact"] = parameters
         overlaps_path = (
             args.output_overlaps_parquet
-            or output_dir / f"Overlap Scan {stem}.parquet"
+            or output_dir / f"{output_name} {stem}.parquet"
         )
         overlaps_path.parent.mkdir(parents=True, exist_ok=True)
         overlaps.to_parquet(overlaps_path, index=False)
@@ -982,14 +1229,20 @@ def main(argv=None):
             f"observations on {len(magfilo_matches)} frames / {len(observations)} "
             f"({unmatched_magfilo} outside {args.magfilo_window_hours:g} h)."
         )
-        print(
-            f"Kislovodsk contacts: "
-            f"{int(overlap_frames['kislovodsk_contact_components'].sum())}; "
-            f"MAGFiLO direct polygon contacts: "
-            f"{int(overlap_frames['magfilo_direct_overlap_components'].sum())}; "
-            f"MAGFiLO tolerance contacts: "
-            f"{int(overlap_frames['magfilo_tolerance_overlap_components'].sum())}."
-        )
+        if boundary_contact is not None:
+            for name, catalog in (("Kislovodsk", "kislovodsk"), ("MAGFiLO", "magfilo")):
+                count = overlap_frames.get(f"{catalog}_boundary_contact_components")
+                total = 0 if count is None else int(count.sum())
+                print(f"{name} aligned boundary contacts: {total}.")
+        else:
+            print(
+                f"Kislovodsk contacts: "
+                f"{int(overlap_frames['kislovodsk_contact_components'].sum())}; "
+                f"MAGFiLO direct polygon contacts: "
+                f"{int(overlap_frames['magfilo_direct_overlap_components'].sum())}; "
+                f"MAGFiLO tolerance contacts: "
+                f"{int(overlap_frames['magfilo_tolerance_overlap_components'].sum())}."
+            )
         print(f"Saved {overlaps_path}")
         print(f"Saved {overlaps_path.with_suffix('.frames.parquet')}")
         return 0

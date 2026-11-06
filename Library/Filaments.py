@@ -10,6 +10,7 @@ from reproject import reproject_interp
 from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.draw import line
+from skimage.measure import find_contours
 from skimage.morphology import skeletonize
 import sunpy.map
 from sunpy.coordinates import HeliographicCarrington, frames
@@ -43,6 +44,7 @@ CATALOG_SUPPORT_RADIUS_PX = 10.0
 CATALOG_ALIGNMENT_TOLERANCE_DEG = 30.0
 CATALOG_TANGENT_WINDOW_PX = 6.0
 CATALOG_MIN_SUPPORTED_CENTERLINE_PX = 5
+BOUNDARY_TANGENT_HALF_WINDOW_ARCSEC = 14.4
 MAGFILO_SUPPORT_RADIUS_PX = 8.0
 MAGFILO_POLYGON_TOLERANCE_PX = 2.0
 MAGFILO_ALIGNMENT_TOLERANCE_DEG = 30.0
@@ -140,6 +142,80 @@ def rasterize_catalog_segments(aia_map, filaments, return_projected_segments=Fal
     if return_projected_segments:
         return filament_mask, len(projected_segments), projected_segments
     return filament_mask, len(projected_segments)
+
+
+def sample_contact_curve(points, closed=False):
+    """Sample a curve in arcsec and estimate tangents along its arc length."""
+    distance = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+    distinct = np.r_[True, np.diff(distance) > 0]
+    distance, points = distance[distinct], points[distinct]
+    if distance[-1] == 0:
+        return None
+
+    length = distance[-1]
+    sample_count = int(np.ceil(length / 1.2))
+    step = length / sample_count
+    midpoints = (np.arange(sample_count) + 0.5) * step
+    half_window = min(BOUNDARY_TANGENT_HALF_WINDOW_ARCSEC, length / 4)
+    before = midpoints - half_window
+    after = midpoints + half_window
+    if closed:
+        before %= length
+        after %= length
+
+    def interpolate(at):
+        return np.column_stack([np.interp(at, distance, axis) for axis in points.T])
+
+    tangents = interpolate(after) - interpolate(before)
+    norms = np.linalg.norm(tangents, axis=1, keepdims=True)
+    np.divide(tangents, norms, out=tangents, where=norms > 0)
+    return interpolate(midpoints), tangents, step
+
+
+def sample_filament_spines(spines, scale_arcsec):
+    """Keep separate filament traces and split each at invalid projections."""
+    curves = []
+    for spine in spines:
+        finite = np.isfinite(spine).all(axis=1)
+        for part in np.split(spine, np.flatnonzero(~finite)):
+            part = part[np.isfinite(part).all(axis=1)]
+            if len(part) >= 2:
+                curve = sample_contact_curve(part * scale_arcsec)
+                if curve is not None:
+                    curves.append(curve)
+    return curves
+
+
+def boundary_contact_lengths(
+    component, scale_arcsec, filament_curves, distance_arcsec, angle_deg
+):
+    """Longest contiguous spine length close and parallel to one CH contour."""
+    longest = {
+        catalog: 0.0 if curves else np.nan for catalog, curves in filament_curves.items()
+    }
+    min_abs_dot = np.cos(np.deg2rad(angle_deg))
+    contours = find_contours(np.pad(component, 1), 0.5, fully_connected="high")
+    for contour in contours:
+        # Marching squares returns (row, column), including the one-pixel pad.
+        points = (contour[:, ::-1] - 1) * scale_arcsec
+        boundary, boundary_tangents, boundary_step = sample_contact_curve(points, closed=True)
+        tree = cKDTree(boundary)
+        for catalog, curves in filament_curves.items():
+            for spine, spine_tangents, step in curves:
+                distance, nearest = tree.query(spine)
+                dot = np.sum(spine_tangents * boundary_tangents[nearest], axis=1)
+                aligned = (distance <= distance_arcsec) & (np.abs(dot) >= min_abs_dot)
+                # Close branches can be adjacent in the image and far apart along
+                # the contour. Break the run when the nearest point jumps branches.
+                jumps = np.abs(np.diff(nearest))
+                arc_jumps = np.minimum(jumps, len(boundary) - jumps) * boundary_step
+                continuous = arc_jumps <= BOUNDARY_TANGENT_HALF_WINDOW_ARCSEC
+                starts = np.flatnonzero(aligned & ~np.r_[False, aligned[:-1] & continuous])
+                ends = np.flatnonzero(aligned & ~np.r_[aligned[1:] & continuous, False])
+                if starts.size:
+                    longest_run = np.max(ends - starts + 1) * step
+                    longest[catalog] = max(longest[catalog], float(longest_run))
+    return longest
 
 
 def compute_elongation(binary_mask):
