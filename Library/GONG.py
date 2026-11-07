@@ -1,11 +1,15 @@
 import json
 from pathlib import Path
+import re
 
 import astropy.units as u
+from astropy.constants import R_sun
 import numpy as np
 import pandas as pd
 from skimage.draw import polygon as draw_polygon
 from skimage.draw import line
+from sunpy.coordinates import sun
+import sunpy.map
 from sunpy.physics.differential_rotation import solar_rotate_coordinate
 
 
@@ -15,6 +19,16 @@ MAGFILO_REQUIRED_KEYS = {
     "images",
     "annotations",
     "categories",
+}
+
+# Latitude and east longitude in degrees, from the GONG FITS site headers.
+GONG_SITE_COORDINATES = {
+    "B": (34.260330, -116.921420),
+    "C": (-30.167830, -70.805470),
+    "L": (-22.218500, 114.102720),
+    "M": (19.536140, -155.575920),
+    "T": (28.300833, -16.511944),
+    "U": (24.614940, 73.669690),
 }
 
 
@@ -106,6 +120,37 @@ def magfilo_fits_url(image_record):
         f"Unexpected GONG quicklook URL: {url}"
     )
     return url.replace("/hag/", "/haf/").removesuffix(".jpg") + ".fits.fz"
+
+
+def magfilo_ephemeris_map(catalog, observation):
+    """Construct the standard GONG grid for projection when its FITS is absent."""
+    filename = Path(observation["url"]).name
+    match = re.fullmatch(r"\d{14}([BCLMTU])h\.jpg", filename)
+    assert match is not None, f"Unsupported GONG image filename: {filename}"
+    latitude, longitude = GONG_SITE_COORDINATES[match[1]]
+    for image_id in observation["image_ids"]:
+        image = magfilo_image_record(catalog, image_id)
+        assert (image["width"], image["height"]) == (2048, 2048), (
+            f"Expected the standard GONG image dimensions for {image_id}"
+        )
+    date = observation["observation_dt"].isoformat()
+    # GONG remaps the disk to a 900-pixel radius on a north-up grid.
+    header = {
+        "TELESCOP": "NSO-GONG",
+        "IMTYPE": "H-ALPHA",
+        "DATE-OBS": date,
+        "CRPIX1": 1024.0,
+        "CRPIX2": 1024.0,
+        "CRVAL1": 0.0,
+        "CRVAL2": 0.0,
+        "FNDLMBMI": 900.0,
+        "FNDLMBMA": 900.0,
+        "RSUN_REF": R_sun.to_value(u.m),
+        "SOLAR-R": sun.angular_radius(date).to_value(u.arcsec),
+        "SITE-LAT": latitude,
+        "SITE-LON": longitude,
+    }
+    return sunpy.map.Map(np.broadcast_to(np.int16(0), (2048, 2048)), header)
 
 
 def coco_to_fits_pixels(points, image_height):

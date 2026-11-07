@@ -242,43 +242,27 @@ SQL input still uses upstream `sdo_fill_sw_193(...)`; the archive manifest
 marks that unresolved provenance question. The 2018 Parquet above is a local
 example artifact, not an included repository dataset.
 
-## H-alpha-supervised filament removal
+## Filament catalog analysis
 
-The filament classifier operates on connected components of the exact IDL
-`*_CH_MASK_FINAL.png` masks. The baseline is an L2-regularized logistic model
-using component geometry, AIA 193 intensity/contrast, AIA 304
-intensity/contrast, and HMI field/polarity features. Catalog distances and match
-flags generate labels but are not model inputs. If `--labels-parquet` is
-provided, Kislovodsk and MAGFiLO positives are combined with an either-or rule;
-frames without either catalog are never treated as negative examples.
-
-After the exact final masks and AIA 304 files are present on Miracle:
+Use an AIA 193 index with matching IDL `*_CH_MASK_FINAL.png` masks to collect
+yearly Kislovodsk and MAGFiLO match statistics.
 
 ```bash
-MACHINE=miracle python Scripts/Make.py Dataset
-MACHINE=miracle python Scripts/Train_Filament.py 20170101 20171231 \
-  --training-only --features-only
-MACHINE=miracle python Scripts/Train_Filament.py 20170101 20171231 --reuse-features
+MACHINE=miracle conda run --no-capture-output -n icme3.12-cuda \
+  python Scripts/Train_Filament.py 20170101 20181231 --catalog-window-hours 12
 ```
 
-The first command rebuilds `Paths.parquet` using only exact final masks. The
-feature-only run is a label-health gate: do not train unless it reports both
-classes. The trainer uses a chronological day split, selects a
-high-precision validation threshold, saves an inspectable JSON model, and
-rejects any 2018 training data.
-`--training-only` is intentionally limited to 2017 feature construction: it
-reads each mask first, then skips empty masks and catalog-uncovered frames
-before expensive AIA 304/HMI work. Do not use it for 2018 inference features.
-Pass the same full region-level catalog table through `--labels-parquet` to
-both trainer invocations when using the Kislovodsk-or-MAGFiLO label union.
-Feature collection uses a bounded process pool: 8 workers on Miracle and 3 on
-risc1, configurable with `--workers`.
+`catalog-stats` is the default mode. It saves a yearly threshold sweep, component
+scores, and frame coverage. MAGFiLO uses the matching GONG FITS when available
+and derives the image geometry from the catalog timestamp and station otherwise.
+Use `--mode overlaps` for raw overlaps, `--mode boundary-contacts` for aligned
+contacts, or `--mode review` for the MAGFiLO gallery.
 
-Build 2018 features, remove predicted filament components without overwriting
-the IDL masks, and calculate the compatible area/SW input:
+To apply the historical classifier, supply its saved model and feature table.
+The resulting mask index can then be used to calculate the compatible area/SW
+input.
 
 ```bash
-MACHINE=miracle python Scripts/Train_Filament.py 20180101 20181231 --features-only
 MACHINE=miracle python Scripts/Apply_Filament.py 20180101 20181231 \
   --model-path "Outputs/Filaments/Classifier 20170101-20171231.json" \
   --features-parquet "Outputs/Filaments/Features 20180101-20181231.parquet"

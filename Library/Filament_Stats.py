@@ -12,6 +12,7 @@ import sunpy.map
 from Library.Filaments import project_catalog_segments, sample_contact_curve
 from Library.GONG import (
     load_magfilo,
+    magfilo_ephemeris_map,
     project_magfilo_observation,
     projected_spine_segments,
     rasterize_projected_annotations,
@@ -171,7 +172,10 @@ def collect_stats_frame(task):
 
     annotations = []
     if frame["magfilo_status"] == "matched":
-        gong = sunpy.map.Map(magfilo["fits_path"])
+        if magfilo["fits_path"] is None:
+            gong = magfilo_ephemeris_map(STATS_MAGFILO_CATALOG, magfilo)
+        else:
+            gong = sunpy.map.Map(magfilo["fits_path"])
         projected = project_magfilo_observation(STATS_MAGFILO_CATALOG, magfilo, gong, aia)
         for annotation in projected:
             # A partly invalid outline would connect across an unobserved gap.
@@ -223,6 +227,12 @@ def yearly_catalog_stats(frames, scores, years, catalogs):
         ready = indexed.loc[indexed["input_status"].eq("ready")]
         for catalog in catalogs:
             covered = ready.loc[ready[f"{catalog}_status"].eq("covered")]
+            frames_with_ephemeris = 0
+            components_with_ephemeris = 0
+            if catalog == "magfilo":
+                ephemeris = covered["magfilo_geometry"].eq("ephemeris")
+                frames_with_ephemeris = int(ephemeris.sum())
+                components_with_ephemeris = int(covered.loc[ephemeris, "components"].sum())
             candidates = scores.loc[score_year.eq(year) & scores["catalog"].eq(catalog)]
             denominator = int(covered["components"].sum())
             for radius in KISLOVODSK_RADII_ARCSEC if catalog == "kislovodsk" else (None,):
@@ -245,6 +255,8 @@ def yearly_catalog_stats(frames, scores, years, catalogs):
                         "frames_indexed": len(indexed), "frames_with_inputs": len(ready),
                         "components_with_inputs": int(ready["components"].sum()),
                         "frames_covered": len(covered), "components_covered": denominator,
+                        "frames_covered_with_ephemeris": frames_with_ephemeris,
+                        "components_covered_with_ephemeris": components_with_ephemeris,
                         "components_with_angle": n_angles,
                         "matches": count if denominator else None,
                         "match_fraction": count / denominator if denominator else None,
