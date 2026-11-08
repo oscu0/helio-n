@@ -21,11 +21,14 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from Library.Config import filament_feature_workers, paths
+from Library.Filament_Footprints import (
+    FOOTPRINT_SCORE_COLUMNS,
+    KISLOVODSK_FULL_WIDTHS_MM,
+)
 from Library.Filament_Stats import (
-    KISLOVODSK_RADII_ARCSEC,
-    REFERENCE_ANGLE_DEG,
-    REFERENCE_OVERLAP,
-    SCORE_COLUMNS,
+    CH_COVERAGE_THRESHOLDS,
+    FOOTPRINT_CONTAINMENT_THRESHOLDS,
+    KISLOVODSK_REVIEW_SCREENS,
     collect_stats_frame,
     initialize_stats_worker,
     yearly_catalog_stats,
@@ -87,7 +90,7 @@ def run_catalog_stats(args, output_dir):
     assert start <= end, "The start date must precede or equal the end date."
     catalogs = ("kislovodsk", "magfilo") if args.stats_catalog == "both" else (args.stats_catalog,)
     destination = args.stats_output_dir or (
-        output_dir / f"Catalog Stats {args.stats_catalog} {args.start}-{args.end}"
+        output_dir / f"Footprint Stats {args.stats_catalog} {args.start}-{args.end}"
     )
     assert not destination.exists(), f"Choose a new output directory: {destination}"
     paths_df = pd.read_parquet(args.paths_parquet).sort_index()
@@ -107,7 +110,7 @@ def run_catalog_stats(args, output_dir):
         missing = ~paths_df[column].map(lambda path: pd.notna(path) and Path(path).is_file())
         paths_df.loc[missing & paths_df["input_status"].eq("ready"), "input_status"] = status
     paths_df.loc[
-        paths_df["input_status"].eq("ready") & paths_df["mask_offset_minutes"].ne(0),
+        paths_df["input_status"].eq("ready") & paths_df["mask_offset_minutes"].abs().gt(args.max_mask_offset_minutes),
         "input_status",
     ] = "mask_frame_mismatch"
 
@@ -178,16 +181,19 @@ def run_catalog_stats(args, output_dir):
 
     if args.workers == 1:
         initialize_stats_worker(magfilo_path)
-        results = list(tqdm(map(collect_stats_frame, tasks), total=len(tasks), desc="Catalog statistics"))
+        results = list(tqdm(map(collect_stats_frame, tasks), total=len(tasks), desc="Footprint statistics"))
     else:
         with ProcessPoolExecutor(
             max_workers=args.workers, mp_context=mp.get_context("spawn"),
             initializer=initialize_stats_worker, initargs=(magfilo_path,),
         ) as executor:
-            results = list(tqdm(executor.map(collect_stats_frame, tasks), total=len(tasks), desc="Catalog statistics"))
+            results = list(tqdm(
+                executor.map(collect_stats_frame, tasks), total=len(tasks), desc="Footprint statistics"
+            ))
     frames = pd.DataFrame([frame for frame, _ in results])
     scores = pd.DataFrame(
-        [score for _, rows in results for score in rows], columns=SCORE_COLUMNS
+        [score for _, rows in results for score in rows],
+        columns=FOOTPRINT_SCORE_COLUMNS,
     )
     annual = yearly_catalog_stats(frames, scores, range(start.year, end.year + 1), catalogs)
 
@@ -209,20 +215,34 @@ def run_catalog_stats(args, output_dir):
             "magfilo_fits_root": str(args.magfilo_fits_root.resolve()) if magfilo_path is not None else None,
             "kislovodsk_window_hours": args.catalog_window_hours,
             "magfilo_window_hours": args.magfilo_window_hours,
-            "kislovodsk_radii_arcsec": KISLOVODSK_RADII_ARCSEC,
-            "reference_overlap_fraction": REFERENCE_OVERLAP,
-            "reference_angle_q80_deg": REFERENCE_ANGLE_DEG,
             "matching_time": "UTC frame key at minute resolution",
-            "mask_matching": "require the mask filename to match the AIA frame key to the minute",
+            "mask_matching": "match the mask filename to the AIA frame key within the specified minute tolerance",
+            "max_mask_offset_minutes": args.max_mask_offset_minutes,
             "magfilo_matching": "nearest AIA frame per GONG exposure, then nearest exposure per AIA frame",
             "magfilo_geometry": (
                 "matched GONG FITS when available, otherwise standard GONG grid with the "
                 "catalog timestamp, GONG site, and SunPy ephemeris angular solar radius"
             ),
             "count_unit": "one connected component per image per catalog and threshold",
-            "kislovodsk_overlap": "fraction of CH skeleton length near finite segments from the matched exposure",
-            "magfilo_overlap": "fraction of CH component area inside a single annotation polygon",
-            "orientation": "arc-length-weighted 80th percentile undirected local angle on supported skeleton",
+            "kislovodsk_full_widths_mm": KISLOVODSK_FULL_WIDTHS_MM,
+            "ch_coverage_thresholds": CH_COVERAGE_THRESHOLDS,
+            "footprint_containment_thresholds": FOOTPRINT_CONTAINMENT_THRESHOLDS,
+            "kislovodsk_review_screens": [
+                {
+                    "name": name, "width_mm": width,
+                    "min_ch_covered_fraction": ch_min,
+                    "min_footprint_inside_ch_fraction": footprint_min,
+                }
+                for (width, ch_min, footprint_min), name in KISLOVODSK_REVIEW_SCREENS.items()
+            ],
+            "match_rule": "both coverage thresholds must pass for the same CH component and footprint",
+            "kislovodsk_footprint": (
+                "surface ellipses with segment endpoints as foci in the midpoint tangent plane; "
+                "projected ellipses sharing pixels are joined transitively"
+            ),
+            "kislovodsk_coverage": "at least one projected footprint at any tested width",
+            "magfilo_footprint": "one projected polygon mask per annotation",
+            "area_measurement": "AIA image pixels; only intersecting pairs are saved",
         }, indent=2) + "\n")
         staging.rename(destination)
     print(f"Saved {len(frames)} frames, {len(scores)} score rows, and annual sweeps to {destination}")
@@ -614,10 +634,11 @@ def main(argv=None):
     parser.add_argument("end", help="inclusive YYYYMMDD")
     parser.add_argument(
         "--mode",
-        choices=("catalog-stats", "overlaps", "boundary-contacts", "review"),
+        choices=("catalog-stats", "footprint-stats", "overlaps", "boundary-contacts", "review"),
         default="catalog-stats",
         help=(
-            "Collect yearly catalog statistics (default), scan raw overlaps or aligned boundary contacts, "
+            "Collect yearly footprint statistics (default; footprint-stats is an alias), "
+            "scan raw overlaps or aligned boundary contacts, "
             "or render the MAGFiLO review gallery."
         ),
     )
@@ -646,9 +667,13 @@ def main(argv=None):
     parser.add_argument("--magfilo-window-hours", type=float, default=0.5)
     parser.add_argument(
         "--stats-catalog", choices=("both", "kislovodsk", "magfilo"), default="both",
-        help="Catalog coverage to measure in catalog-stats mode.",
+        help="Catalog coverage to measure in catalog-stats or footprint-stats mode.",
     )
-    parser.add_argument("--stats-output-dir", type=Path, help="New directory for catalog-stats outputs.")
+    parser.add_argument("--stats-output-dir", type=Path, help="New directory for yearly stats outputs.")
+    parser.add_argument(
+        "--max-mask-offset-minutes", type=int, default=0,
+        help="Allow nearby mask timestamps in stats modes, for comparisons such as ISWAT.",
+    )
     parser.add_argument("--catalog-window-hours", type=float, default=0.5)
     parser.add_argument("--catalog-support-radius-px", type=float, default=10.0)
     parser.add_argument(
@@ -677,11 +702,12 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     assert args.workers >= 1, "workers must be positive"
+    assert args.max_mask_offset_minutes >= 0, "mask timestamp tolerance must be nonnegative"
 
     output_dir = ROOT_DIR / "Outputs" / "Filaments"
     stem = f"{args.start}-{args.end}"
 
-    if args.mode == "catalog-stats":
+    if args.mode in ("catalog-stats", "footprint-stats"):
         return run_catalog_stats(args, output_dir)
 
     assert args.magfilo_window_hours > 0.0

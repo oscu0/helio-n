@@ -252,9 +252,13 @@ MACHINE=miracle conda run --no-capture-output -n icme3.12-cuda \
   python Scripts/Train_Filament.py 20170101 20181231 --catalog-window-hours 12
 ```
 
-`catalog-stats` is the default mode. It saves a yearly threshold sweep, component
-scores, and frame coverage. MAGFiLO uses the matching GONG FITS when available
-and derives the image geometry from the catalog timestamp and station otherwise.
+`catalog-stats` is the default mode. It saves per-pair IoU and both area
+fractions, a yearly joint threshold sweep, and frame coverage under
+`Outputs/Filaments/Footprint Stats …`. Both thresholds must pass for the same
+CH component and filament footprint. Kislovodsk uses projected ellipses at
+4, 8, 12, and 16 Mm full widths. The ISWAT review screens are labeled in the
+yearly CSV. MAGFiLO uses its annotation polygons, projected with the matching
+GONG FITS or geometry derived from the catalog timestamp and station.
 Use `--mode overlaps` for raw overlaps, `--mode boundary-contacts` for aligned
 contacts, or `--mode review` for the MAGFiLO gallery.
 
